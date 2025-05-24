@@ -34,7 +34,7 @@ func TestREADMEExample(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Publish events from other goroutines
-	success1 := hub.Publish("foo", map[string]int{"foo": 90})  // should return true
+	success1 := hub.Publish("foo", map[string]int{"foo": 90}) // should return true
 	if !success1 {
 		t.Error("Expected success1 to be true")
 	}
@@ -44,7 +44,7 @@ func TestREADMEExample(t *testing.T) {
 		t.Error("Expected success2 to be true")
 	}
 
-	success3 := hub.Publish("bar", map[string]int{"bar": 50})  // should return false (no subscribers)
+	success3 := hub.Publish("bar", map[string]int{"bar": 50}) // should return false (no subscribers)
 	if success3 {
 		t.Error("Expected success3 to be false")
 	}
