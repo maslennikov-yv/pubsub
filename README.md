@@ -58,7 +58,7 @@ A high-performance, thread-safe publish-subscribe (pub-sub) implementation in Go
 
 ## Quick Start
 
-\`\`\`go
+```go
 package main
 
 import (
@@ -98,7 +98,7 @@ defer hub.Close()
     fmt.Printf("Received %d events: %v\\n", len(results), results)
     // Output: Received 2 events: map[temperature:map[value:25.5 unit:°C] humidity:map[value:60.0 unit:%]]
 }
-\`\`\`
+```
 
 ## Installation
 
@@ -109,30 +109,30 @@ defer hub.Close()
 
 ### Install from Source
 
-\`\`\`bash
+```bash
 git clone https://github.com/maslennikov-yv/pubsub.git
 cd pubsub
 go mod download
-\`\`\`
+```
 
 ### Use as Module
 
-\`\`\`bash
+```bash
 go mod init your-project
 go get github.com/maslennikov-yv/pubsub
-\`\`\`
+```
 
 Then import in your Go code:
 
-\`\`\`go
+```go
 import "github.com/maslennikov-yv/pubsub"
-\`\`\`
+```
 
 ## Usage Examples
 
 ### Basic Sensor Data Collection
 
-\`\`\`go
+```go
 func collectSensorData() {
 hub := pubsub.NewPubSub()
 defer hub.Close()
@@ -162,11 +162,11 @@ defer hub.Close()
     // Sensor temperature: 23.5
     // Sensor pressure: 1013.25
 }
-\`\`\`
+```
 
 ### Event Overwriting Demonstration
 
-\`\`\`go
+```go
 func demonstrateOverwriting() {
 hub := pubsub.NewPubSub()
 defer hub.Close()
@@ -187,11 +187,11 @@ defer hub.Close()
     fmt.Printf("Latest stock price: %v\\n", results["stock_price"])
     // Output: Latest stock price: 101.00 (or any of the published values)
 }
-\`\`\`
+```
 
 ### Microservice Communication
 
-\`\`\`go
+```go
 func microserviceAggregation() {
 hub := pubsub.NewPubSub()
 defer hub.Close()
@@ -230,11 +230,11 @@ defer hub.Close()
         fmt.Printf("%s: %v\\n", service, response)
     }
 }
-\`\`\`
+```
 
 ### Real-time Monitoring Dashboard
 
-\`\`\`go
+```go
 func monitoringDashboard() {
 hub := pubsub.NewPubSub()
 defer hub.Close()
@@ -272,7 +272,7 @@ defer hub.Close()
     fmt.Println("System Metrics:", systemMetrics)
     fmt.Println("Network Metrics:", networkMetrics)
 }
-\`\`\`
+```
 
 ## API Documentation
 
@@ -282,21 +282,21 @@ defer hub.Close()
 
 The main hub for publish-subscribe operations.
 
-\`\`\`go
+```go
 type PubSub struct {
 // Internal fields are not exported
 }
-\`\`\`
+```
 
 #### Subscriber
 
 Represents a subscriber that can wait for multiple events.
 
-\`\`\`go
+```go
 type Subscriber struct {
 // Internal fields are not exported
 }
-\`\`\`
+```
 
 ### Methods
 
@@ -304,9 +304,9 @@ type Subscriber struct {
 
 Creates a new PubSub instance.
 
-\`\`\`go
+```go
 hub := pubsub.NewPubSub()
-\`\`\`
+```
 
 **Returns:**
 - `*PubSub`: A new PubSub instance
@@ -315,9 +315,9 @@ hub := pubsub.NewPubSub()
 
 Creates a new subscriber for this PubSub instance.
 
-\`\`\`go
+```go
 subscriber := hub.NewSubscriber()
-\`\`\`
+```
 
 **Returns:**
 - `*Subscriber`: A new subscriber instance, or `nil` if PubSub is closed
@@ -326,9 +326,9 @@ subscriber := hub.NewSubscriber()
 
 Publishes a message to all subscribers of the specified topic.
 
-\`\`\`go
+```go
 success := hub.Publish("sensor_data", map[string]float64{"temperature": 25.5})
-\`\`\`
+```
 
 **Parameters:**
 - `key`: Topic key to publish to
@@ -341,12 +341,12 @@ success := hub.Publish("sensor_data", map[string]float64{"temperature": 25.5})
 
 Gracefully shuts down the PubSub system.
 
-\`\`\`go
+```go
 err := hub.Close()
 if err != nil {
 log.Printf("Error during shutdown: %v", err)
 }
-\`\`\`
+```
 
 **Returns:**
 - `error`: Error if cleanup timeout occurred, `nil` otherwise
@@ -355,11 +355,11 @@ log.Printf("Error during shutdown: %v", err)
 
 Returns whether the PubSub instance has been closed.
 
-\`\`\`go
+```go
 if hub.IsClosed() {
 fmt.Println("PubSub is closed")
 }
-\`\`\`
+```
 
 **Returns:**
 - `bool`: `true` if closed, `false` otherwise
@@ -368,10 +368,10 @@ fmt.Println("PubSub is closed")
 
 Subscribes to events for the specified topic key.
 
-\`\`\`go
+```go
 subscriber.Subscribe("temperature")
 subscriber.Subscribe("humidity")
-\`\`\`
+```
 
 **Parameters:**
 - `key`: Topic key to subscribe to
@@ -380,9 +380,9 @@ subscriber.Subscribe("humidity")
 
 Waits for subscribed events with the specified timeout.
 
-\`\`\`go
+```go
 results := subscriber.Wait(100 * time.Millisecond)
-\`\`\`
+```
 
 **Parameters:**
 - `timeout`: Maximum time to wait for events
@@ -399,9 +399,9 @@ results := subscriber.Wait(100 * time.Millisecond)
 
 Generates an MD5 hash of the provided key.
 
-\`\`\`go
+```go
 hash := hub.Hash("my-topic-key")
-\`\`\`
+```
 
 **Parameters:**
 - `key`: String to hash
@@ -423,7 +423,7 @@ Returns the number of subscribers for a specific topic (primarily for testing).
 
 ### System Overview
 
-\`\`\`
+```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Publisher 1   │    │   Publisher 2   │    │   Publisher N   │
 └─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
@@ -460,7 +460,7 @@ Message Delivery
 │ │   Results   │ │    │ │   Results   │ │    │ │    Map      │ │
 │ └─────────────┘ │    │ └─────────────┘ │    │ └─────────────┘ │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
-\`\`\`
+```
 
 ### Key Components
 
@@ -512,24 +512,24 @@ The system uses several concurrency patterns:
 ### Development Setup
 
 1. **Clone the repository:**
-   \`\`\`bash
+   ```bash
    git clone https://github.com/maslennikov-yv/pubsub.git
    cd pubsub
-   \`\`\`
+   ```
 
 2. **Install dependencies:**
-   \`\`\`bash
+   ```bash
    go mod download
-   \`\`\`
+   ```
 
 3. **Install development tools:**
-   \`\`\`bash
+   ```bash
    make tools
-   \`\`\`
+   ```
 
 ### Build Commands
 
-\`\`\`bash
+```bash
 # Build the project
 make build
 
@@ -541,11 +541,11 @@ make run
 
 # Development workflow (clean, format, vet, test, run)
 make dev
-\`\`\`
+```
 
 ### Code Quality
 
-\`\`\`bash
+```bash
 # Format code
 make fmt
 
@@ -557,11 +557,11 @@ make lint
 
 # Run all quality checks
 make check
-\`\`\`
+```
 
 ### Project Structure
 
-\`\`\`
+```
 pubsub/
 ├── README.md              # This file
 ├── README_RU.md          # Russian documentation
@@ -574,13 +574,13 @@ pubsub/
 ├── readme_test.go        # README example tests
 └── example/
 └── main.go           # Usage example
-\`\`\`
+```
 
 ## Testing
 
 ### Running Tests
 
-\`\`\`bash
+```bash
 # Run all tests with race detection
 make test
 
@@ -593,7 +593,7 @@ make coverage
 # View coverage in browser
 make coverage
 open coverage.html
-\`\`\`
+```
 
 ### Test Categories
 
@@ -632,7 +632,7 @@ Coverage includes:
 
 ### Benchmarks
 
-\`\`\`bash
+```bash
 # Run all benchmarks
 make bench
 
@@ -640,7 +640,7 @@ make bench
 BenchmarkPublishSubscribe-8      	   50000	     25000 ns/op	    1024 B/op	      15 allocs/op
 BenchmarkConcurrentPublish-8     	  100000	     12000 ns/op	     512 B/op	       8 allocs/op
 BenchmarkHash-8                  	 1000000	      1200 ns/op	      32 B/op	       1 allocs/op
-\`\`\`
+```
 
 ### Performance Characteristics
 
@@ -661,56 +661,56 @@ BenchmarkHash-8                  	 1000000	      1200 ns/op	      32 B/op	      
 ### 1. **Sensor Data Collection**
 Perfect for IoT scenarios where you need to collect data from multiple sensors within a time window.
 
-\`\`\`go
+```go
 // Collect temperature readings from multiple sensors
 subscriber.Subscribe("sensor_1")
 subscriber.Subscribe("sensor_2")
 subscriber.Subscribe("sensor_3")
 results := subscriber.Wait(500 * time.Millisecond)
-\`\`\`
+```
 
 ### 2. **Microservice Communication**
 Aggregate responses from multiple microservices with timeout handling.
 
-\`\`\`go
+```go
 // Wait for responses from user, order, and inventory services
 subscriber.Subscribe("user_service")
 subscriber.Subscribe("order_service")
 subscriber.Subscribe("inventory_service")
 responses := subscriber.Wait(2 * time.Second)
-\`\`\`
+```
 
 ### 3. **Real-time Event Aggregation**
 Collect events from various sources before processing.
 
-\`\`\`go
+```go
 // Aggregate trading events
 subscriber.Subscribe("trade_executed")
 subscriber.Subscribe("price_updated")
 subscriber.Subscribe("volume_changed")
 events := subscriber.Wait(100 * time.Millisecond)
-\`\`\`
+```
 
 ### 4. **Distributed System Monitoring**
 Monitor health and status from distributed components.
 
-\`\`\`go
+```go
 // Health check aggregation
 subscriber.Subscribe("database_health")
 subscriber.Subscribe("cache_health")
 subscriber.Subscribe("api_health")
 healthStatus := subscriber.Wait(1 * time.Second)
-\`\`\`
+```
 
 ### 5. **Batch Processing**
 Collect data items until timeout or completion.
 
-\`\`\`go
+```go
 // Batch processing with timeout
 subscriber.Subscribe("data_item")
 subscriber.Subscribe("processing_complete")
 batch := subscriber.Wait(5 * time.Second)
-\`\`\`
+```
 
 ## Contributing
 
@@ -751,7 +751,7 @@ We welcome contributions! Please follow these guidelines:
 
 ### Development Workflow
 
-\`\`\`bash
+```bash
 # 1. Create feature branch
 git checkout -b feature/your-feature-name
 
@@ -766,13 +766,13 @@ git commit -m "Add your feature description"
 git push origin feature/your-feature-name
 
 # 5. Create pull request on GitHub
-\`\`\`
+```
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-\`\`\`
+```
 MIT License
 
 Copyright (c) 2024 PubSub Contributors
@@ -794,7 +794,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-\`\`\`
+```
 
 ## Support
 
