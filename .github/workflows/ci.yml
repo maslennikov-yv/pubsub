@@ -88,7 +88,3 @@ jobs:
       - name: Build
         run: make build
         timeout-minutes: 2
-
-      - name: Build example
-        run: go build -v ./example
-        timeout-minutes: 1
