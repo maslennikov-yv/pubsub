@@ -13,6 +13,7 @@ import (
 // TestNewPubSub tests the constructor
 func TestNewPubSub(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
 
 	if ps == nil {
 		t.Fatal("NewPubSub() returned nil")
@@ -25,11 +26,17 @@ func TestNewPubSub(t *testing.T) {
 	if len(ps.topics) != 0 {
 		t.Fatalf("expected empty topics map, got %d topics", len(ps.topics))
 	}
+
+	if ps.IsClosed() {
+		t.Fatal("new PubSub should not be closed")
+	}
 }
 
 // TestNewSubscriber tests subscriber creation
 func TestNewSubscriber(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 
 	if sub == nil {
@@ -56,6 +63,8 @@ func TestNewSubscriber(t *testing.T) {
 // TestBasicPublishSubscribe tests basic pub/sub functionality
 func TestBasicPublishSubscribe(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 
 	// Subscribe to a topic
@@ -85,6 +94,7 @@ func TestBasicPublishSubscribe(t *testing.T) {
 // TestPublishWithoutSubscribers tests publishing to non-existent topics
 func TestPublishWithoutSubscribers(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
 
 	success := ps.Publish("non-existent", "payload")
 	if success {
@@ -95,6 +105,8 @@ func TestPublishWithoutSubscribers(t *testing.T) {
 // TestMultipleSubscribers tests multiple subscribers to same topic
 func TestMultipleSubscribers(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub1 := ps.NewSubscriber()
 	sub2 := ps.NewSubscriber()
 	sub3 := ps.NewSubscriber()
@@ -145,6 +157,8 @@ func TestMultipleSubscribers(t *testing.T) {
 // TestMultipleTopicsPerSubscriber tests subscriber with multiple topics
 func TestMultipleTopicsPerSubscriber(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 
 	topics := []string{"topic1", "topic2", "topic3"}
@@ -184,6 +198,8 @@ func TestMultipleTopicsPerSubscriber(t *testing.T) {
 // TestEventOverwritingWithinSinglePublish tests that rapid publishes before Wait() completes
 func TestEventOverwritingWithinSinglePublish(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 	sub.Subscribe("overwrite-topic")
 
@@ -217,6 +233,8 @@ func TestEventOverwritingWithinSinglePublish(t *testing.T) {
 // TestEventOverwritingBehavior tests the actual behavior of event overwriting
 func TestEventOverwritingBehavior(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 	sub.Subscribe("behavior-topic")
 
@@ -275,6 +293,8 @@ func TestEventOverwritingBehavior(t *testing.T) {
 // TestTimeout tests timeout behavior
 func TestTimeout(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 
 	sub.Subscribe("timeout-topic1")
@@ -310,6 +330,8 @@ func TestTimeout(t *testing.T) {
 // TestEarlyCompletion tests early completion when all events received
 func TestEarlyCompletion(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 
 	sub.Subscribe("early1")
@@ -339,6 +361,8 @@ func TestEarlyCompletion(t *testing.T) {
 // TestConcurrentPublish tests concurrent publishing
 func TestConcurrentPublish(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 
 	numTopics := 100
@@ -381,6 +405,7 @@ func TestConcurrentPublish(t *testing.T) {
 // TestConcurrentSubscribers tests multiple subscribers running concurrently
 func TestConcurrentSubscribers(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
 
 	numSubscribers := 50
 	var wg sync.WaitGroup
@@ -420,6 +445,7 @@ func TestConcurrentSubscribers(t *testing.T) {
 // TestTopicCleanup tests that topics are cleaned up when no subscribers remain
 func TestTopicCleanup(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
 
 	// Create subscriber and subscribe
 	sub := ps.NewSubscriber()
@@ -464,6 +490,7 @@ func TestTopicCleanup(t *testing.T) {
 // TestTopicCleanupWithTimeout tests cleanup behavior with timeout
 func TestTopicCleanupWithTimeout(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
 
 	// Create subscriber and subscribe
 	sub := ps.NewSubscriber()
@@ -491,6 +518,7 @@ func TestTopicCleanupWithTimeout(t *testing.T) {
 // TestHash tests the Hash function
 func TestHash(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
 
 	testCases := []struct {
 		input string
@@ -529,6 +557,8 @@ func TestHash(t *testing.T) {
 // TestSubscribeToSameTopicMultipleTimes tests subscribing to same topic multiple times
 func TestSubscribeToSameTopicMultipleTimes(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 
 	// Subscribe to same topic multiple times
@@ -561,6 +591,8 @@ func TestSubscribeToSameTopicMultipleTimes(t *testing.T) {
 // TestEmptyKey tests behavior with empty string keys
 func TestEmptyKey(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 
 	sub.Subscribe("")
@@ -587,6 +619,8 @@ func TestEmptyKey(t *testing.T) {
 // TestNilPayload tests publishing nil payloads
 func TestNilPayload(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 
 	sub.Subscribe("nil-topic")
@@ -613,6 +647,8 @@ func TestNilPayload(t *testing.T) {
 // TestComplexPayload tests publishing complex data structures
 func TestComplexPayload(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 
 	sub.Subscribe("complex-topic")
@@ -653,6 +689,8 @@ func TestComplexPayload(t *testing.T) {
 // TestZeroTimeout tests behavior with zero timeout
 func TestZeroTimeout(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 
 	sub.Subscribe("zero-timeout-topic")
@@ -681,6 +719,7 @@ func TestZeroTimeout(t *testing.T) {
 // TestMemoryLeaks tests for potential memory leaks
 func TestMemoryLeaks(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
 
 	// Create many subscribers and let them timeout
 	for i := 0; i < 100; i++ {
@@ -708,6 +747,8 @@ func TestMemoryLeaks(t *testing.T) {
 // TestPublishAfterSubscriberCompletes tests publishing after subscriber has finished
 func TestPublishAfterSubscriberCompletes(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 	sub.Subscribe("after-complete")
 
@@ -734,6 +775,7 @@ func TestPublishAfterSubscriberCompletes(t *testing.T) {
 // TestRapidPublishSubscribe tests rapid publish/subscribe cycles
 func TestRapidPublishSubscribe(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
 
 	for i := 0; i < 10; i++ {
 		sub := ps.NewSubscriber()
@@ -767,6 +809,7 @@ func TestRapidPublishSubscribe(t *testing.T) {
 // TestGetTopicCount tests the GetTopicCount helper method
 func TestGetTopicCount(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
 
 	if ps.GetTopicCount() != 0 {
 		t.Fatalf("expected 0 topics initially, got %d", ps.GetTopicCount())
@@ -798,6 +841,7 @@ func TestGetTopicCount(t *testing.T) {
 // TestGetSubscriberCount tests the GetSubscriberCount helper method
 func TestGetSubscriberCount(t *testing.T) {
 	ps := NewPubSub()
+	defer ps.Close()
 
 	if ps.GetSubscriberCount("nonexistent") != 0 {
 		t.Fatalf("expected 0 subscribers for nonexistent topic, got %d", ps.GetSubscriberCount("nonexistent"))
@@ -829,9 +873,192 @@ func TestGetSubscriberCount(t *testing.T) {
 	}
 }
 
+// TestClose tests the Close method
+func TestClose(t *testing.T) {
+	ps := NewPubSub()
+
+	// Create some subscribers
+	sub1 := ps.NewSubscriber()
+	sub2 := ps.NewSubscriber()
+
+	sub1.Subscribe("topic1")
+	sub2.Subscribe("topic2")
+
+	// Verify initial state
+	if ps.IsClosed() {
+		t.Fatal("PubSub should not be closed initially")
+	}
+
+	if ps.GetTopicCount() != 2 {
+		t.Fatalf("expected 2 topics, got %d", ps.GetTopicCount())
+	}
+
+	// Close the PubSub - should not return error for inactive subscribers
+	err := ps.Close()
+	if err != nil {
+		t.Logf("close returned error (may be acceptable): %v", err)
+	}
+
+	// Verify closed state
+	if !ps.IsClosed() {
+		t.Fatal("PubSub should be closed after Close()")
+	}
+
+	if ps.GetTopicCount() != 0 {
+		t.Fatalf("expected 0 topics after close, got %d", ps.GetTopicCount())
+	}
+}
+
+// TestCloseMultipleTimes tests calling Close multiple times
+func TestCloseMultipleTimes(t *testing.T) {
+	ps := NewPubSub()
+
+	// First close should succeed
+	err1 := ps.Close()
+	if err1 != nil {
+		t.Fatalf("first close failed: %v", err1)
+	}
+
+	// Subsequent closes should be safe (no-op)
+	err2 := ps.Close()
+	if err2 != nil {
+		t.Fatalf("second close failed: %v", err2)
+	}
+
+	err3 := ps.Close()
+	if err3 != nil {
+		t.Fatalf("third close failed: %v", err3)
+	}
+
+	if !ps.IsClosed() {
+		t.Fatal("PubSub should remain closed")
+	}
+}
+
+// TestOperationsAfterClose tests that operations fail gracefully after close
+func TestOperationsAfterClose(t *testing.T) {
+	ps := NewPubSub()
+
+	// Close the PubSub
+	err := ps.Close()
+	if err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+
+	// NewSubscriber should return nil
+	sub := ps.NewSubscriber()
+	if sub != nil {
+		t.Fatal("NewSubscriber should return nil after close")
+	}
+
+	// Publish should return false
+	success := ps.Publish("test", "payload")
+	if success {
+		t.Fatal("Publish should return false after close")
+	}
+}
+
+// TestCloseWithActiveSubscribers tests closing with active subscribers
+func TestCloseWithActiveSubscribers(t *testing.T) {
+	ps := NewPubSub()
+
+	numSubscribers := 10
+	var wg sync.WaitGroup
+	results := make([]map[string]interface{}, numSubscribers)
+
+	// Start multiple subscribers with long timeouts
+	wg.Add(numSubscribers)
+	for i := 0; i < numSubscribers; i++ {
+		go func(index int) {
+			defer wg.Done()
+			sub := ps.NewSubscriber()
+			if sub != nil {
+				sub.Subscribe(fmt.Sprintf("topic%d", index))
+				// Long timeout - should be interrupted by Close()
+				results[index] = sub.Wait(5 * time.Second)
+			}
+		}(i)
+	}
+
+	// Give subscribers time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify subscribers are active
+	if ps.GetTopicCount() != numSubscribers {
+		t.Fatalf("expected %d topics, got %d", numSubscribers, ps.GetTopicCount())
+	}
+
+	// Close should interrupt all subscribers
+	start := time.Now()
+	err := ps.Close()
+	elapsed := time.Since(start)
+
+	// Close might return an error due to cleanup timeout, but that's acceptable
+	if err != nil {
+		t.Logf("close returned error (acceptable): %v", err)
+	}
+
+	// Close should complete within reasonable time (100ms timeout + buffer)
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("close took too long: %v", elapsed)
+	}
+
+	// Wait for all subscribers to complete
+	wg.Wait()
+
+	// Verify all topics are cleaned up
+	if ps.GetTopicCount() != 0 {
+		t.Fatalf("expected 0 topics after close, got %d", ps.GetTopicCount())
+	}
+
+	// All results should be empty (interrupted by close)
+	for i, result := range results {
+		if len(result) != 0 {
+			t.Fatalf("subscriber %d: expected empty result due to close interruption, got %v", i, result)
+		}
+	}
+}
+
+// TestCloseTimeout tests close timeout behavior
+func TestCloseTimeout(t *testing.T) {
+	ps := NewPubSub()
+
+	// Create a subscriber that might be slow to clean up
+	sub := ps.NewSubscriber()
+	sub.Subscribe("slow-topic")
+
+	// Start a subscriber with a very long timeout
+	go func() {
+		sub.Wait(10 * time.Second)
+	}()
+
+	// Give subscriber time to start waiting
+	time.Sleep(20 * time.Millisecond)
+
+	// Close should complete within reasonable time
+	start := time.Now()
+	err := ps.Close()
+	elapsed := time.Since(start)
+
+	// Should complete within the 100ms timeout plus some buffer
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("close took too long: %v", elapsed)
+	}
+
+	// Error might be returned if cleanup times out, but that's acceptable
+	if err != nil {
+		t.Logf("close returned error (acceptable): %v", err)
+	}
+
+	if !ps.IsClosed() {
+		t.Fatal("PubSub should be closed even if cleanup timed out")
+	}
+}
+
 // BenchmarkPublishSubscribe benchmarks basic pub/sub performance
 func BenchmarkPublishSubscribe(b *testing.B) {
 	ps := NewPubSub()
+	defer ps.Close()
 
 	b.ResetTimer()
 
@@ -850,6 +1077,8 @@ func BenchmarkPublishSubscribe(b *testing.B) {
 // BenchmarkConcurrentPublish benchmarks concurrent publishing
 func BenchmarkConcurrentPublish(b *testing.B) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	sub := ps.NewSubscriber()
 	sub.Subscribe("concurrent-bench")
 
@@ -871,6 +1100,8 @@ func BenchmarkConcurrentPublish(b *testing.B) {
 // BenchmarkHash benchmarks the Hash function
 func BenchmarkHash(b *testing.B) {
 	ps := NewPubSub()
+	defer ps.Close()
+
 	keys := []string{
 		"short",
 		"medium-length-key",
@@ -882,5 +1113,22 @@ func BenchmarkHash(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		key := keys[i%len(keys)]
 		ps.Hash(key)
+	}
+}
+
+// BenchmarkClose benchmarks the Close method
+func BenchmarkClose(b *testing.B) {
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		ps := NewPubSub()
+
+		// Create some subscribers
+		for j := 0; j < 10; j++ {
+			sub := ps.NewSubscriber()
+			sub.Subscribe(fmt.Sprintf("topic%d", j))
+		}
+
+		ps.Close()
 	}
 }
