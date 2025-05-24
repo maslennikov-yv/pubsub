@@ -1,141 +1,239 @@
-.PHONY: test build clean run fmt vet lint install-deps bench init-deps check-go-version vet-verbose
+.PHONY: test build clean run fmt vet lint bench coverage help
 
 # Go parameters
 GOCMD=go
 GOBUILD=$(GOCMD) build
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
-GOGET=$(GOCMD) get
-GOFMT=$(GOCMD) fmt
+GOMOD=$(GOCMD) mod
 GOVET=$(GOCMD) vet
+GOFMT=gofmt
 
-# Check Go version and module support
-check-go-version:
-	@echo "Checking Go version..."
-	@$(GOCMD) version
-	@if $(GOCMD) help mod >/dev/null 2>&1; then \
-		echo "Go modules supported"; \
-	else \
-		echo "Go modules not supported, using legacy GOPATH mode"; \
-	fi
+# Project settings
+BINARY_NAME=pubsub-example
+COVERAGE_FILE=coverage.out
+COVERAGE_HTML=coverage.html
 
-# Initialize dependencies (with fallback for older Go versions)
-init-deps: check-go-version
-	@if $(GOCMD) help mod >/dev/null 2>&1; then \
-		echo "Using Go modules..."; \
-		$(GOCMD) mod tidy; \
-		$(GOCMD) mod download; \
-	else \
-		echo "Using legacy GOPATH mode..."; \
-		$(GOGET) -t ./...; \
-	fi
+# Build flags
+BUILD_FLAGS=-v
+TEST_FLAGS=-v -race -coverprofile=$(COVERAGE_FILE)
+BENCH_FLAGS=-bench=. -benchmem
+
+# Ensure Go modules are enabled
+export GO111MODULE=on
+
+# Default target
+all: clean fmt vet test build
+
+# Download and tidy dependencies
+deps:
+	@echo "Downloading dependencies..."
+	$(GOMOD) download
+	$(GOMOD) tidy
+
+# Verify dependencies
+deps-verify:
+	@echo "Verifying dependencies..."
+	$(GOMOD) verify
 
 # Build the project
-build: init-deps
-	$(GOBUILD) -v ./...
+build: deps
+	@echo "Building project..."
+	$(GOBUILD) $(BUILD_FLAGS) ./...
 
-# Run tests (with fallback for older Go versions)
-test: init-deps
-	@if $(GOCMD) help mod >/dev/null 2>&1; then \
-		$(GOTEST) -v -race -coverprofile=coverage.out ./...; \
-	else \
-		$(GOTEST) -v -race ./...; \
-	fi
+# Build the example binary
+build-example: deps
+	@echo "Building example..."
+	$(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME) ./example
+
+# Run tests
+test: deps
+	@echo "Running tests..."
+	$(GOTEST) $(TEST_FLAGS) ./...
+
+# Run tests without race detection (faster)
+test-fast: deps
+	@echo "Running fast tests..."
+	$(GOTEST) -v ./...
 
 # Run tests with coverage report
-test-coverage: test
-	@if [ -f coverage.out ]; then \
-		$(GOCMD) tool cover -html=coverage.out -o coverage.html; \
-		echo "Coverage report generated: coverage.html"; \
-	else \
-		echo "No coverage file found"; \
-	fi
+coverage: test
+	@echo "Generating coverage report..."
+	$(GOCMD) tool cover -html=$(COVERAGE_FILE) -o $(COVERAGE_HTML)
+	@echo "Coverage report generated: $(COVERAGE_HTML)"
+
+# Display coverage in terminal
+coverage-text: test
+	@echo "Coverage summary:"
+	$(GOCMD) tool cover -func=$(COVERAGE_FILE)
 
 # Run benchmarks
-bench: init-deps
-	$(GOTEST) -bench=. -benchmem ./...
+bench: deps
+	@echo "Running benchmarks..."
+	$(GOTEST) $(BENCH_FLAGS) ./...
 
 # Run the example
-run: init-deps
-	$(GOCMD) run example/main.go
+run: build-example
+	@echo "Running example..."
+	./$(BINARY_NAME)
 
-# Clean build artifacts
-clean:
-	$(GOCLEAN)
-	rm -f coverage.out coverage.html
+# Run example without building binary
+run-direct: deps
+	@echo "Running example directly..."
+	$(GOCMD) run ./example
 
 # Format code
 fmt:
-	$(GOFMT) ./...
+	@echo "Formatting code..."
+	$(GOFMT) -s -w .
 
-# Run go vet with timeout protection
-vet:
-	@echo "Running go vet..."
-	@timeout 30s $(GOVET) ./... || (echo "go vet timed out or failed"; exit 1)
-
-# Run go vet with verbose output for debugging
-vet-verbose:
-	@echo "Running go vet with verbose output..."
-	$(GOVET) -x ./...
-
-# Run go vet on individual files to isolate issues
-vet-files:
-	@echo "Running go vet on individual files..."
-	@for file in *.go; do \
-		echo "Checking $$file..."; \
-		$(GOVET) $$file || echo "Issue in $$file"; \
-	done
-
-# Install dependencies (legacy support)
-install-deps: init-deps
-
-# Run all checks with better error handling
-check: fmt vet-safe test
-
-# Safe vet that won't hang
-vet-safe:
-	@echo "Running safe go vet..."
-	@$(GOVET) . || echo "go vet found issues but continuing..."
-
-# Initialize module (run once, only for Go 1.11+)
-init:
-	@if $(GOCMD) help mod >/dev/null 2>&1; then \
-		$(GOCMD) mod init pubsub-timeout; \
-		$(GOCMD) mod tidy; \
-	else \
-		echo "Go modules not supported, skipping module initialization"; \
+# Check if code is formatted
+fmt-check:
+	@echo "Checking code formatting..."
+	@if [ "$$($(GOFMT) -s -l . | wc -l)" -gt 0 ]; then \
+		echo "Code is not formatted. Run 'make fmt' to fix:"; \
+		$(GOFMT) -s -l .; \
+		exit 1; \
 	fi
 
-# Simple build without dependencies (for older Go)
-build-simple:
-	$(GOBUILD) -v .
+# Run go vet
+vet: deps
+	@echo "Running go vet..."
+	$(GOVET) ./...
 
-# Simple test without modules
-test-simple:
-	$(GOTEST) -v .
+# Run static analysis
+lint: fmt-check vet
+	@echo "Running static analysis..."
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		golangci-lint run; \
+	else \
+		echo "golangci-lint not installed. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
+	fi
 
-# Quick check without vet (for CI environments with issues)
-check-quick: fmt test
+# Install development tools
+tools:
+	@echo "Installing development tools..."
+	$(GOCMD) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	$(GOCMD) install golang.org/x/vuln/cmd/govulncheck@latest
 
-# Help
+# Security vulnerability check
+security: deps
+	@echo "Checking for security vulnerabilities..."
+	@if command -v govulncheck >/dev/null 2>&1; then \
+		govulncheck ./...; \
+	else \
+		echo "govulncheck not installed. Install with: make tools"; \
+	fi
+
+# Update dependencies to latest versions
+deps-update:
+	@echo "Updating dependencies..."
+	$(GOMOD) get -u ./...
+	$(GOMOD) tidy
+
+# Check for outdated dependencies
+deps-outdated:
+	@echo "Checking for outdated dependencies..."
+	$(GOCMD) list -u -m all
+
+# Clean build artifacts
+clean:
+	@echo "Cleaning build artifacts..."
+	$(GOCLEAN)
+	rm -f $(BINARY_NAME)
+	rm -f $(COVERAGE_FILE)
+	rm -f $(COVERAGE_HTML)
+
+# Deep clean (including module cache)
+clean-all: clean
+	@echo "Cleaning module cache..."
+	$(GOCMD) clean -modcache
+
+# Run all quality checks
+check: fmt-check vet lint test
+
+# Run CI pipeline locally
+ci: clean deps-verify check coverage bench security
+
+# Development workflow
+dev: clean fmt vet test run
+
+# Release build with optimizations
+release: clean deps
+	@echo "Building release..."
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-linux-amd64 ./example
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-windows-amd64.exe ./example
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-darwin-amd64 ./example
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-darwin-arm64 ./example
+
+# Watch for file changes and run tests (requires entr)
+watch:
+	@if command -v entr >/dev/null 2>&1; then \
+		find . -name "*.go" | entr -c make test; \
+	else \
+		echo "entr not installed. Install with your package manager for file watching."; \
+	fi
+
+# Generate documentation
+docs:
+	@echo "Generating documentation..."
+	$(GOCMD) doc -all .
+
+# Show project statistics
+stats:
+	@echo "Project statistics:"
+	@echo "Lines of Go code:"
+	@find . -name "*.go" -not -path "./vendor/*" | xargs wc -l | tail -1
+	@echo ""
+	@echo "Dependencies:"
+	@$(GOMOD) graph | wc -l
+	@echo ""
+	@echo "Test coverage:"
+	@make coverage-text 2>/dev/null | grep "total:" || echo "Run 'make test' first"
+
+# Help target
 help:
-	@echo "Available commands:"
-	@echo "  check-go-version  - Check Go version and module support"
-	@echo "  init-deps         - Initialize and download dependencies"
-	@echo "  build             - Build the project"
-	@echo "  build-simple      - Build without dependency management"
-	@echo "  test              - Run tests"
-	@echo "  test-simple       - Run tests without modules"
-	@echo "  test-coverage     - Run tests with coverage report"
-	@echo "  bench             - Run benchmarks"
-	@echo "  run               - Run the example"
-	@echo "  clean             - Clean build artifacts"
-	@echo "  fmt               - Format code"
-	@echo "  vet               - Run go vet with timeout"
-	@echo "  vet-verbose       - Run go vet with verbose output"
-	@echo "  vet-files         - Run go vet on individual files"
-	@echo "  vet-safe          - Run go vet safely (won't fail build)"
-	@echo "  install-deps      - Install dependencies (legacy)"
-	@echo "  check             - Run fmt, vet, and test"
-	@echo "  check-quick       - Run fmt and test (skip vet)"
-	@echo "  help              - Show this help message"
+	@echo "Available targets:"
+	@echo ""
+	@echo "Building:"
+	@echo "  build         - Build the project"
+	@echo "  build-example - Build example binary"
+	@echo "  release       - Cross-compile release binaries"
+	@echo ""
+	@echo "Testing:"
+	@echo "  test          - Run all tests with coverage"
+	@echo "  test-fast     - Run tests without race detection"
+	@echo "  bench         - Run benchmarks"
+	@echo "  coverage      - Generate HTML coverage report"
+	@echo "  coverage-text - Show coverage summary"
+	@echo ""
+	@echo "Code Quality:"
+	@echo "  fmt           - Format code"
+	@echo "  fmt-check     - Check code formatting"
+	@echo "  vet           - Run go vet"
+	@echo "  lint          - Run static analysis"
+	@echo "  check         - Run all quality checks"
+	@echo "  security      - Check for vulnerabilities"
+	@echo ""
+	@echo "Dependencies:"
+	@echo "  deps          - Download and tidy dependencies"
+	@echo "  deps-verify   - Verify dependencies"
+	@echo "  deps-update   - Update dependencies to latest"
+	@echo "  deps-outdated - Check for outdated dependencies"
+	@echo ""
+	@echo "Running:"
+	@echo "  run           - Build and run example"
+	@echo "  run-direct    - Run example without building binary"
+	@echo ""
+	@echo "Development:"
+	@echo "  tools         - Install development tools"
+	@echo "  watch         - Watch files and run tests (requires entr)"
+	@echo "  dev           - Development workflow (clean, fmt, vet, test, run)"
+	@echo "  ci            - Run CI pipeline locally"
+	@echo ""
+	@echo "Utilities:"
+	@echo "  clean         - Clean build artifacts"
+	@echo "  clean-all     - Clean everything including module cache"
+	@echo "  docs          - Generate documentation"
+	@echo "  stats         - Show project statistics"
+	@echo "  help          - Show this help message"
