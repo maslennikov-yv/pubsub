@@ -1,3 +1,3 @@
-module github.com/maslennikov-yv/pubsub
+module pubsub
 
 go 1.21

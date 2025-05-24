@@ -3,48 +3,43 @@ package main
 import (
 	"fmt"
 	"time"
-
-	"github.com/maslennikov-yv/pubsub"
+	"pubsub"
 )
 
 func main() {
-	// Create the pub-sub hub
+	// Create a new pub-sub hub
 	hub := pubsub.NewPubSub()
-	defer hub.Close()
 
+	// Create a subscriber
 	subscriber := hub.NewSubscriber()
-	defer subscriber.Close()
 
-	// Subscribe to events by string key
-	subscriber.Subscribe("foo")
-	subscriber.Subscribe("buz")
+	// Subscribe to topics we're interested in
+	subscriber.Subscribe("temperature")
+	subscriber.Subscribe("humidity")
 
-	// Start waiting for events in a goroutine
+	// Start publishing data in a separate goroutine
 	go func() {
-		fmt.Println("Waiting for events (1 second timeout)...")
-		results := subscriber.Wait(time.Second * 1)
+		// Simulate sensor data arriving at different times
+		time.Sleep(50 * time.Millisecond)
+		hub.Publish("temperature", map[string]interface{}{
+			"value": 25.5,
+			"unit":  "°C",
+		})
 
-		fmt.Println("Results received:")
-		for key, value := range results {
-			fmt.Printf("  %s: %v\n", key, value)
-		}
+		time.Sleep(100 * time.Millisecond)
+		hub.Publish("humidity", map[string]interface{}{
+			"value": 60.0,
+			"unit":  "%",
+		})
 	}()
 
-	// Give subscriber time to start waiting
-	time.Sleep(100 * time.Millisecond)
+	// Wait for events with a 1-second timeout
+	fmt.Println("Waiting for sensor data...")
+	results := subscriber.Wait(1 * time.Second)
 
-	// Publish events from main goroutine
-	fmt.Println("Publishing events...")
-
-	success1 := hub.Publish("foo", map[string]int{"foo": 90})
-	fmt.Printf("Published foo=90: %t\n", success1)
-
-	success2 := hub.Publish("foo", map[string]int{"foo": 100})
-	fmt.Printf("Published foo=100: %t\n", success2)
-
-	success3 := hub.Publish("bar", map[string]int{"bar": 50})
-	fmt.Printf("Published bar=50: %t\n", success3)
-
-	// Wait for completion
-	time.Sleep(time.Second * 2)
+	// Display the results
+	fmt.Printf("Received %d events:\n", len(results))
+	for topic, data := range results {
+		fmt.Printf("  %s: %v\n", topic, data)
+	}
 }

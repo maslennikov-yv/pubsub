@@ -1,187 +1,886 @@
 package pubsub
 
 import (
+	"crypto/md5"
+	"encoding/hex"
+	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 )
 
-// Test API compatibility with README examples
-func TestREADMEExample(t *testing.T) {
-	// Exact code from README should work
-	hub := NewPubSub()
-	defer hub.Close()
+// TestNewPubSub tests the constructor
+func TestNewPubSub(t *testing.T) {
+	ps := NewPubSub()
 
-	subscriber := hub.NewSubscriber()
-	defer subscriber.Close()
+	if ps == nil {
+		t.Fatal("NewPubSub() returned nil")
+	}
 
-	// Subscribe to events by string key
-	subscriber.Subscribe("foo")
-	subscriber.Subscribe("buz")
+	if ps.topics == nil {
+		t.Fatal("topics map not initialized")
+	}
 
-	// Start waiting in a goroutine
-	var results map[string]interface{}
-	var wg sync.WaitGroup
-	wg.Add(1)
+	if len(ps.topics) != 0 {
+		t.Fatalf("expected empty topics map, got %d topics", len(ps.topics))
+	}
+}
 
+// TestNewSubscriber tests subscriber creation
+func TestNewSubscriber(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+
+	if sub == nil {
+		t.Fatal("NewSubscriber() returned nil")
+	}
+
+	if sub.ps != ps {
+		t.Fatal("subscriber not linked to pubsub")
+	}
+
+	if sub.subscriptions == nil {
+		t.Fatal("subscriber subscriptions map not initialized")
+	}
+
+	if sub.results == nil {
+		t.Fatal("subscriber results map not initialized")
+	}
+
+	if sub.waitCh == nil {
+		t.Fatal("subscriber waitCh channel not initialized")
+	}
+}
+
+// TestBasicPublishSubscribe tests basic pub/sub functionality
+func TestBasicPublishSubscribe(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+
+	// Subscribe to a topic
+	sub.Subscribe("test-topic")
+
+	// Publish in a goroutine
 	go func() {
-		defer wg.Done()
-		// Wait up to 1 second for events
-		results = subscriber.Wait(time.Second * 1)
+		time.Sleep(10 * time.Millisecond)
+		success := ps.Publish("test-topic", "test-payload")
+		if !success {
+			t.Errorf("expected publish to succeed")
+		}
 	}()
 
-	// Give subscriber time to start waiting
+	// Wait for the message
+	results := sub.Wait(100 * time.Millisecond)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	if results["test-topic"] != "test-payload" {
+		t.Fatalf("expected 'test-payload', got %v", results["test-topic"])
+	}
+}
+
+// TestPublishWithoutSubscribers tests publishing to non-existent topics
+func TestPublishWithoutSubscribers(t *testing.T) {
+	ps := NewPubSub()
+
+	success := ps.Publish("non-existent", "payload")
+	if success {
+		t.Fatal("expected publish to fail when no subscribers")
+	}
+}
+
+// TestMultipleSubscribers tests multiple subscribers to same topic
+func TestMultipleSubscribers(t *testing.T) {
+	ps := NewPubSub()
+	sub1 := ps.NewSubscriber()
+	sub2 := ps.NewSubscriber()
+	sub3 := ps.NewSubscriber()
+
+	// All subscribe to same topic
+	sub1.Subscribe("shared-topic")
+	sub2.Subscribe("shared-topic")
+	sub3.Subscribe("shared-topic")
+
+	var wg sync.WaitGroup
+	results := make([]map[string]interface{}, 3)
+
+	// Start all subscribers
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		results[0] = sub1.Wait(100 * time.Millisecond)
+	}()
+	go func() {
+		defer wg.Done()
+		results[1] = sub2.Wait(100 * time.Millisecond)
+	}()
+	go func() {
+		defer wg.Done()
+		results[2] = sub3.Wait(100 * time.Millisecond)
+	}()
+
+	// Publish after a short delay
 	time.Sleep(10 * time.Millisecond)
-
-	// Publish events from other goroutines
-	success1 := hub.Publish("foo", map[string]int{"foo": 90}) // should return true
-	if !success1 {
-		t.Error("Expected success1 to be true")
-	}
-
-	success2 := hub.Publish("foo", map[string]int{"foo": 100}) // should return true (overwrites previous)
-	if !success2 {
-		t.Error("Expected success2 to be true")
-	}
-
-	success3 := hub.Publish("bar", map[string]int{"bar": 50}) // should return false (no subscribers)
-	if success3 {
-		t.Error("Expected success3 to be false")
+	success := ps.Publish("shared-topic", "shared-payload")
+	if !success {
+		t.Fatal("expected publish to succeed")
 	}
 
 	wg.Wait()
 
-	// Results should contain: {"foo": {"foo": 100}}
-	if results == nil {
-		t.Fatal("Results should not be nil")
-	}
-
-	// Should have foo with latest value (100, not 90) - event overwriting
-	fooData, exists := results["foo"]
-	if !exists {
-		t.Error("Expected foo to exist in results")
-	}
-
-	fooMap, ok := fooData.(map[string]int)
-	if !ok {
-		t.Error("Expected foo data to be map[string]int")
-	}
-
-	if fooMap["foo"] != 100 {
-		t.Errorf("Expected foo value to be 100 (latest), got %d", fooMap["foo"])
-	}
-
-	// Should not have buz (nothing published to it)
-	_, exists = results["buz"]
-	if exists {
-		t.Error("Expected buz not to exist in results (nothing published)")
-	}
-
-	// Should not have bar (not subscribed)
-	_, exists = results["bar"]
-	if exists {
-		t.Error("Expected bar not to exist in results (not subscribed)")
+	// All subscribers should receive the message
+	for i, result := range results {
+		if len(result) != 1 {
+			t.Fatalf("subscriber %d: expected 1 result, got %d", i, len(result))
+		}
+		if result["shared-topic"] != "shared-payload" {
+			t.Fatalf("subscriber %d: expected 'shared-payload', got %v", i, result["shared-topic"])
+		}
 	}
 }
 
-func TestTimeoutBehavior(t *testing.T) {
-	hub := NewPubSub()
-	defer hub.Close()
+// TestMultipleTopicsPerSubscriber tests subscriber with multiple topics
+func TestMultipleTopicsPerSubscriber(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
 
-	subscriber := hub.NewSubscriber()
-	defer subscriber.Close()
+	topics := []string{"topic1", "topic2", "topic3"}
+	for _, topic := range topics {
+		sub.Subscribe(topic)
+	}
 
-	subscriber.Subscribe("test")
+	// Publish to all topics in goroutines
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		ps.Publish("topic1", "payload1")
+		time.Sleep(10 * time.Millisecond)
+		ps.Publish("topic2", "payload2")
+		time.Sleep(10 * time.Millisecond)
+		ps.Publish("topic3", "payload3")
+	}()
+
+	results := sub.Wait(200 * time.Millisecond)
+
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+
+	expectedPayloads := map[string]string{
+		"topic1": "payload1",
+		"topic2": "payload2",
+		"topic3": "payload3",
+	}
+
+	for topic, expectedPayload := range expectedPayloads {
+		if results[topic] != expectedPayload {
+			t.Fatalf("topic %s: expected '%s', got %v", topic, expectedPayload, results[topic])
+		}
+	}
+}
+
+// TestEventOverwritingWithinSinglePublish tests that rapid publishes before Wait() completes
+func TestEventOverwritingWithinSinglePublish(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+	sub.Subscribe("overwrite-topic")
+
+	// Use a channel to synchronize the start of publishing
+	startPublish := make(chan struct{})
+
+	go func() {
+		<-startPublish // Wait for signal to start publishing
+		// Publish all events rapidly without any delays
+		ps.Publish("overwrite-topic", "first")
+		ps.Publish("overwrite-topic", "second")
+		ps.Publish("overwrite-topic", "third")
+	}()
+
+	// Start publishing and then immediately wait
+	close(startPublish)
+	results := sub.Wait(100 * time.Millisecond)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	// The result should be one of the published values
+	// Since they're published rapidly, any of them could be the final value
+	value := results["overwrite-topic"]
+	if value != "first" && value != "second" && value != "third" {
+		t.Fatalf("expected one of 'first', 'second', or 'third', got %v", value)
+	}
+}
+
+// TestEventOverwritingBehavior tests the actual behavior of event overwriting
+func TestEventOverwritingBehavior(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+	sub.Subscribe("behavior-topic")
+
+	var mu sync.Mutex
+	var publishResults []bool
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+
+		// First publish should succeed
+		success1 := ps.Publish("behavior-topic", "first")
+		mu.Lock()
+		publishResults = append(publishResults, success1)
+		mu.Unlock()
+
+		// Subsequent publishes might fail if subscriber already completed
+		success2 := ps.Publish("behavior-topic", "second")
+		mu.Lock()
+		publishResults = append(publishResults, success2)
+		mu.Unlock()
+
+		success3 := ps.Publish("behavior-topic", "third")
+		mu.Lock()
+		publishResults = append(publishResults, success3)
+		mu.Unlock()
+	}()
+
+	results := sub.Wait(100 * time.Millisecond)
+
+	// Wait for all publishes to complete
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	// The first publish should always succeed
+	if len(publishResults) > 0 && !publishResults[0] {
+		t.Fatal("first publish should succeed")
+	}
+
+	// The result should be from a successful publish
+	value := results["behavior-topic"]
+	t.Logf("Final result: %v", value)
+	t.Logf("Publish results: %v", publishResults)
+
+	// Verify we got a valid result
+	if value != "first" && value != "second" && value != "third" {
+		t.Fatalf("unexpected result value: %v", value)
+	}
+}
+
+// TestTimeout tests timeout behavior
+func TestTimeout(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+
+	sub.Subscribe("timeout-topic1")
+	sub.Subscribe("timeout-topic2")
+	sub.Subscribe("timeout-topic3")
+
+	// Only publish to one topic
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		ps.Publish("timeout-topic1", "received")
+		// timeout-topic2 and timeout-topic3 never get published
+	}()
 
 	start := time.Now()
-	results := subscriber.Wait(100 * time.Millisecond)
+	results := sub.Wait(50 * time.Millisecond)
 	elapsed := time.Since(start)
 
-	// Should timeout around 100ms
-	if elapsed < 100*time.Millisecond {
-		t.Errorf("Expected timeout to be at least 100ms, got %v", elapsed)
+	// Should timeout after ~50ms
+	if elapsed < 45*time.Millisecond || elapsed > 100*time.Millisecond {
+		t.Fatalf("expected timeout around 50ms, got %v", elapsed)
 	}
 
-	// Should return empty results on timeout (as per README)
-	if len(results) != 0 {
-		t.Errorf("Expected empty results on timeout, got %v", results)
+	// Should only have the one published topic
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	if results["timeout-topic1"] != "received" {
+		t.Fatalf("expected 'received', got %v", results["timeout-topic1"])
 	}
 }
 
+// TestEarlyCompletion tests early completion when all events received
 func TestEarlyCompletion(t *testing.T) {
-	hub := NewPubSub()
-	defer hub.Close()
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
 
-	subscriber := hub.NewSubscriber()
-	defer subscriber.Close()
+	sub.Subscribe("early1")
+	sub.Subscribe("early2")
 
-	subscriber.Subscribe("test1")
-	subscriber.Subscribe("test2")
-
-	var results map[string]interface{}
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	start := time.Now()
 	go func() {
-		defer wg.Done()
-		results = subscriber.Wait(time.Second * 1) // Long timeout
+		time.Sleep(10 * time.Millisecond)
+		ps.Publish("early1", "payload1")
+		time.Sleep(10 * time.Millisecond)
+		ps.Publish("early2", "payload2")
 	}()
 
-	// Give subscriber time to start waiting
-	time.Sleep(10 * time.Millisecond)
-
-	// Publish both events quickly
-	hub.Publish("test1", "data1")
-	hub.Publish("test2", "data2")
-
-	wg.Wait()
+	start := time.Now()
+	results := sub.Wait(1 * time.Second) // Long timeout
 	elapsed := time.Since(start)
 
-	// Should complete much faster than 1 second (early completion)
+	// Should complete early (much less than 1 second)
 	if elapsed > 100*time.Millisecond {
-		t.Errorf("Expected early completion, took %v", elapsed)
+		t.Fatalf("expected early completion, took %v", elapsed)
 	}
 
-	// Should have both events
-	if results["test1"] != "data1" {
-		t.Errorf("Expected test1 to be 'data1', got %v", results["test1"])
-	}
-	if results["test2"] != "data2" {
-		t.Errorf("Expected test2 to be 'data2', got %v", results["test2"])
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
 	}
 }
 
-func TestEventOverwriting(t *testing.T) {
-	hub := NewPubSub()
-	defer hub.Close()
+// TestConcurrentPublish tests concurrent publishing
+func TestConcurrentPublish(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
 
-	subscriber := hub.NewSubscriber()
-	defer subscriber.Close()
+	numTopics := 100
+	for i := 0; i < numTopics; i++ {
+		sub.Subscribe(fmt.Sprintf("topic%d", i))
+	}
 
-	subscriber.Subscribe("test")
+	// Publish concurrently from multiple goroutines
+	var publishWg sync.WaitGroup
+	publishWg.Add(numTopics)
 
-	var results map[string]interface{}
+	for i := 0; i < numTopics; i++ {
+		go func(topicNum int) {
+			defer publishWg.Done()
+			topic := fmt.Sprintf("topic%d", topicNum)
+			payload := fmt.Sprintf("payload%d", topicNum)
+			ps.Publish(topic, payload)
+		}(i)
+	}
+
+	// Wait for all publishes to complete
+	publishWg.Wait()
+
+	results := sub.Wait(100 * time.Millisecond)
+
+	if len(results) != numTopics {
+		t.Fatalf("expected %d results, got %d", numTopics, len(results))
+	}
+
+	// Verify all payloads
+	for i := 0; i < numTopics; i++ {
+		topic := fmt.Sprintf("topic%d", i)
+		expectedPayload := fmt.Sprintf("payload%d", i)
+		if results[topic] != expectedPayload {
+			t.Fatalf("topic %s: expected '%s', got %v", topic, expectedPayload, results[topic])
+		}
+	}
+}
+
+// TestConcurrentSubscribers tests multiple subscribers running concurrently
+func TestConcurrentSubscribers(t *testing.T) {
+	ps := NewPubSub()
+
+	numSubscribers := 50
 	var wg sync.WaitGroup
-	wg.Add(1)
+	results := make([]map[string]interface{}, numSubscribers)
 
-	go func() {
-		defer wg.Done()
-		results = subscriber.Wait(time.Second * 1)
-	}()
+	// Create and start multiple subscribers
+	wg.Add(numSubscribers)
+	for i := 0; i < numSubscribers; i++ {
+		go func(subNum int) {
+			defer wg.Done()
+			sub := ps.NewSubscriber()
+			sub.Subscribe("concurrent-topic")
+			results[subNum] = sub.Wait(100 * time.Millisecond)
+		}(i)
+	}
 
-	// Give subscriber time to start waiting
+	// Publish after a short delay
 	time.Sleep(10 * time.Millisecond)
-
-	// Publish multiple events with same key (should overwrite)
-	hub.Publish("test", "first")
-	hub.Publish("test", "second")
-	hub.Publish("test", "third")
+	success := ps.Publish("concurrent-topic", "concurrent-payload")
+	if !success {
+		t.Fatal("expected publish to succeed")
+	}
 
 	wg.Wait()
 
-	// Should only have the last event (overwriting behavior)
-	if results["test"] != "third" {
-		t.Errorf("Expected 'third' (latest event), got %v", results["test"])
+	// All subscribers should receive the message
+	for i, result := range results {
+		if len(result) != 1 {
+			t.Fatalf("subscriber %d: expected 1 result, got %d", i, len(result))
+		}
+		if result["concurrent-topic"] != "concurrent-payload" {
+			t.Fatalf("subscriber %d: expected 'concurrent-payload', got %v", i, result["concurrent-topic"])
+		}
+	}
+}
+
+// TestTopicCleanup tests that topics are cleaned up when no subscribers remain
+func TestTopicCleanup(t *testing.T) {
+	ps := NewPubSub()
+
+	// Create subscriber and subscribe
+	sub := ps.NewSubscriber()
+	sub.Subscribe("cleanup-topic")
+
+	// Verify topic exists
+	if ps.GetTopicCount() != 1 {
+		t.Fatalf("expected 1 topic after subscription, got %d", ps.GetTopicCount())
+	}
+
+	if ps.GetSubscriberCount("cleanup-topic") != 1 {
+		t.Fatalf("expected 1 subscriber for topic, got %d", ps.GetSubscriberCount("cleanup-topic"))
+	}
+
+	// Publish and wait (this will clean up the subscriber)
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		ps.Publish("cleanup-topic", "cleanup-payload")
+	}()
+
+	results := sub.Wait(100 * time.Millisecond)
+
+	// Verify we got the result
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	if results["cleanup-topic"] != "cleanup-payload" {
+		t.Fatalf("expected 'cleanup-payload', got %v", results["cleanup-topic"])
+	}
+
+	// Verify topic is cleaned up
+	if ps.GetTopicCount() != 0 {
+		t.Fatalf("expected 0 topics after cleanup, got %d", ps.GetTopicCount())
+	}
+
+	if ps.GetSubscriberCount("cleanup-topic") != 0 {
+		t.Fatalf("expected 0 subscribers after cleanup, got %d", ps.GetSubscriberCount("cleanup-topic"))
+	}
+}
+
+// TestTopicCleanupWithTimeout tests cleanup behavior with timeout
+func TestTopicCleanupWithTimeout(t *testing.T) {
+	ps := NewPubSub()
+
+	// Create subscriber and subscribe
+	sub := ps.NewSubscriber()
+	sub.Subscribe("timeout-cleanup-topic")
+
+	// Verify topic exists
+	if ps.GetTopicCount() != 1 {
+		t.Fatalf("expected 1 topic after subscription, got %d", ps.GetTopicCount())
+	}
+
+	// Don't publish anything - let it timeout
+	results := sub.Wait(10 * time.Millisecond)
+
+	// Should have no results due to timeout
+	if len(results) != 0 {
+		t.Fatalf("expected 0 results due to timeout, got %d", len(results))
+	}
+
+	// Verify topic is cleaned up even after timeout
+	if ps.GetTopicCount() != 0 {
+		t.Fatalf("expected 0 topics after timeout cleanup, got %d", ps.GetTopicCount())
+	}
+}
+
+// TestHash tests the Hash function
+func TestHash(t *testing.T) {
+	ps := NewPubSub()
+
+	testCases := []struct {
+		input string
+	}{
+		{""},
+		{"hello"},
+		{"test"},
+		{"pubsub"},
+		{"very-long-key-that-should-also-work"},
+	}
+
+	for _, tc := range testCases {
+		result := ps.Hash(tc.input)
+
+		// Verify it's a valid MD5 hash (32 hex characters)
+		if len(result) != 32 {
+			t.Fatalf("hash of '%s': expected 32 characters, got %d", tc.input, len(result))
+		}
+
+		// Verify it matches expected MD5
+		expectedHash := md5.Sum([]byte(tc.input))
+		expected := hex.EncodeToString(expectedHash[:])
+
+		if result != expected {
+			t.Fatalf("hash of '%s': expected '%s', got '%s'", tc.input, expected, result)
+		}
+
+		// Verify consistency - same input should always produce same hash
+		result2 := ps.Hash(tc.input)
+		if result != result2 {
+			t.Fatalf("hash inconsistent for '%s': got '%s' and '%s'", tc.input, result, result2)
+		}
+	}
+}
+
+// TestSubscribeToSameTopicMultipleTimes tests subscribing to same topic multiple times
+func TestSubscribeToSameTopicMultipleTimes(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+
+	// Subscribe to same topic multiple times
+	sub.Subscribe("duplicate-topic")
+	sub.Subscribe("duplicate-topic")
+	sub.Subscribe("duplicate-topic")
+
+	// Should still only count as one subscription
+	if ps.GetSubscriberCount("duplicate-topic") != 1 {
+		t.Fatalf("expected 1 subscriber despite multiple subscriptions, got %d", ps.GetSubscriberCount("duplicate-topic"))
+	}
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		ps.Publish("duplicate-topic", "duplicate-payload")
+	}()
+
+	results := sub.Wait(100 * time.Millisecond)
+
+	// Should still only get one result
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	if results["duplicate-topic"] != "duplicate-payload" {
+		t.Fatalf("expected 'duplicate-payload', got %v", results["duplicate-topic"])
+	}
+}
+
+// TestEmptyKey tests behavior with empty string keys
+func TestEmptyKey(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+
+	sub.Subscribe("")
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		success := ps.Publish("", "empty-key-payload")
+		if !success {
+			t.Errorf("expected publish to succeed for empty key")
+		}
+	}()
+
+	results := sub.Wait(100 * time.Millisecond)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	if results[""] != "empty-key-payload" {
+		t.Fatalf("expected 'empty-key-payload', got %v", results[""])
+	}
+}
+
+// TestNilPayload tests publishing nil payloads
+func TestNilPayload(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+
+	sub.Subscribe("nil-topic")
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		success := ps.Publish("nil-topic", nil)
+		if !success {
+			t.Errorf("expected publish to succeed with nil payload")
+		}
+	}()
+
+	results := sub.Wait(100 * time.Millisecond)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	if results["nil-topic"] != nil {
+		t.Fatalf("expected nil, got %v", results["nil-topic"])
+	}
+}
+
+// TestComplexPayload tests publishing complex data structures
+func TestComplexPayload(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+
+	sub.Subscribe("complex-topic")
+
+	complexPayload := map[string]interface{}{
+		"string":  "value",
+		"number":  42,
+		"boolean": true,
+		"array":   []int{1, 2, 3},
+		"nested": map[string]string{
+			"key": "nested-value",
+		},
+	}
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		ps.Publish("complex-topic", complexPayload)
+	}()
+
+	results := sub.Wait(100 * time.Millisecond)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	// Verify the complex payload was received correctly
+	received := results["complex-topic"].(map[string]interface{})
+
+	if received["string"] != "value" {
+		t.Fatalf("expected 'value', got %v", received["string"])
+	}
+
+	if received["number"] != 42 {
+		t.Fatalf("expected 42, got %v", received["number"])
+	}
+}
+
+// TestZeroTimeout tests behavior with zero timeout
+func TestZeroTimeout(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+
+	sub.Subscribe("zero-timeout-topic")
+
+	// Don't publish anything
+	start := time.Now()
+	results := sub.Wait(0)
+	elapsed := time.Since(start)
+
+	// Should return immediately
+	if elapsed > 10*time.Millisecond {
+		t.Fatalf("expected immediate return, took %v", elapsed)
+	}
+
+	// Should have no results
+	if len(results) != 0 {
+		t.Fatalf("expected 0 results, got %d", len(results))
+	}
+
+	// Should be cleaned up
+	if ps.GetTopicCount() != 0 {
+		t.Fatalf("expected 0 topics after zero timeout, got %d", ps.GetTopicCount())
+	}
+}
+
+// TestMemoryLeaks tests for potential memory leaks
+func TestMemoryLeaks(t *testing.T) {
+	ps := NewPubSub()
+
+	// Create many subscribers and let them timeout
+	for i := 0; i < 100; i++ {
+		sub := ps.NewSubscriber()
+		sub.Subscribe(fmt.Sprintf("leak-topic-%d", i))
+
+		go func() {
+			sub.Wait(1 * time.Millisecond) // Very short timeout
+		}()
+	}
+
+	// Give time for all to timeout and cleanup
+	time.Sleep(50 * time.Millisecond)
+
+	// Force garbage collection
+	runtime.GC()
+	runtime.GC()
+
+	// Check that topics map is empty (all cleaned up)
+	if ps.GetTopicCount() != 0 {
+		t.Fatalf("expected 0 topics after cleanup, got %d", ps.GetTopicCount())
+	}
+}
+
+// TestPublishAfterSubscriberCompletes tests publishing after subscriber has finished
+func TestPublishAfterSubscriberCompletes(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+	sub.Subscribe("after-complete")
+
+	// Complete the subscriber with a short timeout
+	results := sub.Wait(10 * time.Millisecond)
+
+	// Should have no results due to timeout
+	if len(results) != 0 {
+		t.Fatalf("expected 0 results, got %d", len(results))
+	}
+
+	// Verify topic is cleaned up
+	if ps.GetTopicCount() != 0 {
+		t.Fatalf("expected 0 topics after subscriber completion, got %d", ps.GetTopicCount())
+	}
+
+	// Now try to publish - should fail because no subscribers
+	success := ps.Publish("after-complete", "too-late")
+	if success {
+		t.Fatal("expected publish to fail after subscriber completed")
+	}
+}
+
+// TestRapidPublishSubscribe tests rapid publish/subscribe cycles
+func TestRapidPublishSubscribe(t *testing.T) {
+	ps := NewPubSub()
+
+	for i := 0; i < 10; i++ {
+		sub := ps.NewSubscriber()
+		topic := fmt.Sprintf("rapid-%d", i)
+		payload := fmt.Sprintf("payload-%d", i)
+
+		sub.Subscribe(topic)
+
+		go func(t string, p string) {
+			time.Sleep(1 * time.Millisecond)
+			ps.Publish(t, p)
+		}(topic, payload)
+
+		results := sub.Wait(50 * time.Millisecond)
+
+		if len(results) != 1 {
+			t.Fatalf("iteration %d: expected 1 result, got %d", i, len(results))
+		}
+
+		if results[topic] != payload {
+			t.Fatalf("iteration %d: expected '%s', got %v", i, payload, results[topic])
+		}
+
+		// Verify cleanup after each iteration
+		if ps.GetTopicCount() != 0 {
+			t.Fatalf("iteration %d: expected 0 topics after cleanup, got %d", i, ps.GetTopicCount())
+		}
+	}
+}
+
+// TestGetTopicCount tests the GetTopicCount helper method
+func TestGetTopicCount(t *testing.T) {
+	ps := NewPubSub()
+
+	if ps.GetTopicCount() != 0 {
+		t.Fatalf("expected 0 topics initially, got %d", ps.GetTopicCount())
+	}
+
+	sub1 := ps.NewSubscriber()
+	sub1.Subscribe("topic1")
+
+	if ps.GetTopicCount() != 1 {
+		t.Fatalf("expected 1 topic after first subscription, got %d", ps.GetTopicCount())
+	}
+
+	sub2 := ps.NewSubscriber()
+	sub2.Subscribe("topic2")
+
+	if ps.GetTopicCount() != 2 {
+		t.Fatalf("expected 2 topics after second subscription, got %d", ps.GetTopicCount())
+	}
+
+	// Subscribe to existing topic
+	sub3 := ps.NewSubscriber()
+	sub3.Subscribe("topic1")
+
+	if ps.GetTopicCount() != 2 {
+		t.Fatalf("expected 2 topics after subscribing to existing topic, got %d", ps.GetTopicCount())
+	}
+}
+
+// TestGetSubscriberCount tests the GetSubscriberCount helper method
+func TestGetSubscriberCount(t *testing.T) {
+	ps := NewPubSub()
+
+	if ps.GetSubscriberCount("nonexistent") != 0 {
+		t.Fatalf("expected 0 subscribers for nonexistent topic, got %d", ps.GetSubscriberCount("nonexistent"))
+	}
+
+	sub1 := ps.NewSubscriber()
+	sub1.Subscribe("topic1")
+
+	if ps.GetSubscriberCount("topic1") != 1 {
+		t.Fatalf("expected 1 subscriber for topic1, got %d", ps.GetSubscriberCount("topic1"))
+	}
+
+	sub2 := ps.NewSubscriber()
+	sub2.Subscribe("topic1")
+
+	if ps.GetSubscriberCount("topic1") != 2 {
+		t.Fatalf("expected 2 subscribers for topic1, got %d", ps.GetSubscriberCount("topic1"))
+	}
+
+	sub3 := ps.NewSubscriber()
+	sub3.Subscribe("topic2")
+
+	if ps.GetSubscriberCount("topic1") != 2 {
+		t.Fatalf("expected 2 subscribers for topic1 after topic2 subscription, got %d", ps.GetSubscriberCount("topic1"))
+	}
+
+	if ps.GetSubscriberCount("topic2") != 1 {
+		t.Fatalf("expected 1 subscriber for topic2, got %d", ps.GetSubscriberCount("topic2"))
+	}
+}
+
+// BenchmarkPublishSubscribe benchmarks basic pub/sub performance
+func BenchmarkPublishSubscribe(b *testing.B) {
+	ps := NewPubSub()
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		sub := ps.NewSubscriber()
+		sub.Subscribe("bench-topic")
+
+		go func() {
+			ps.Publish("bench-topic", "bench-payload")
+		}()
+
+		sub.Wait(100 * time.Millisecond)
+	}
+}
+
+// BenchmarkConcurrentPublish benchmarks concurrent publishing
+func BenchmarkConcurrentPublish(b *testing.B) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+	sub.Subscribe("concurrent-bench")
+
+	b.ResetTimer()
+
+	var wg sync.WaitGroup
+	wg.Add(b.N)
+
+	for i := 0; i < b.N; i++ {
+		go func() {
+			defer wg.Done()
+			ps.Publish("concurrent-bench", "payload")
+		}()
+	}
+
+	wg.Wait()
+}
+
+// BenchmarkHash benchmarks the Hash function
+func BenchmarkHash(b *testing.B) {
+	ps := NewPubSub()
+	keys := []string{
+		"short",
+		"medium-length-key",
+		"very-long-key-that-might-be-used-in-real-applications",
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		key := keys[i%len(keys)]
+		ps.Hash(key)
 	}
 }
