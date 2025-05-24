@@ -45,7 +45,7 @@ build: deps
 build-example: deps
 	@echo "Building example..."
 	@rm -f $(BINARY_NAME)
-	$(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME) ./example
+	$(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME) ./example/
 
 # Run tests
 test: deps
@@ -207,10 +207,10 @@ dev: clean fmt vet test run
 # Release build with optimizations
 release: clean deps
 	@echo "Building release..."
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-linux-amd64 ./example
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-windows-amd64.exe ./example
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-darwin-amd64 ./example
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-darwin-arm64 ./example
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-linux-amd64 ./example/
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-windows-amd64.exe ./example/
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-darwin-amd64 ./example/
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_NAME)-darwin-arm64 ./example/
 
 # Watch for file changes and run tests (requires entr)
 watch:
