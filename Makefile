@@ -113,16 +113,60 @@ lint: fmt-check vet
 # Install development tools
 tools:
 	@echo "Installing development tools..."
+	@echo "Installing golangci-lint..."
 	$(GOCMD) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@echo "Installing govulncheck..."
 	$(GOCMD) install golang.org/x/vuln/cmd/govulncheck@latest
+	@echo "Installing gosec..."
+	$(GOCMD) install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
+	@echo "Verifying installations..."
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		echo "✓ golangci-lint installed successfully"; \
+		golangci-lint version; \
+	else \
+		echo "✗ golangci-lint installation failed"; \
+	fi
+	@if command -v govulncheck >/dev/null 2>&1; then \
+		echo "✓ govulncheck installed successfully"; \
+		govulncheck -version; \
+	else \
+		echo "✗ govulncheck installation failed"; \
+	fi
+	@if command -v gosec >/dev/null 2>&1; then \
+		echo "✓ gosec installed successfully"; \
+		gosec -version; \
+	else \
+		echo "✗ gosec installation failed"; \
+	fi
 
-# Security vulnerability check
+# Security vulnerability check with better error handling
 security: deps
 	@echo "Checking for security vulnerabilities..."
+	@echo "Running govulncheck..."
 	@if command -v govulncheck >/dev/null 2>&1; then \
 		govulncheck ./...; \
 	else \
-		echo "govulncheck not installed. Install with: make tools"; \
+		echo "govulncheck not found. Installing..."; \
+		$(GOCMD) install golang.org/x/vuln/cmd/govulncheck@latest; \
+		if command -v govulncheck >/dev/null 2>&1; then \
+			echo "Installation successful. Running govulncheck..."; \
+			govulncheck ./...; \
+		else \
+			echo "Failed to install govulncheck. Skipping vulnerability check."; \
+		fi \
+	fi
+	@echo "Running gosec..."
+	@if command -v gosec >/dev/null 2>&1; then \
+		gosec ./...; \
+	else \
+		echo "gosec not found. Installing..."; \
+		$(GOCMD) install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest; \
+		if command -v gosec >/dev/null 2>&1; then \
+			echo "Installation successful. Running gosec..."; \
+			gosec ./...; \
+		else \
+			echo "Failed to install gosec. Skipping security scan."; \
+		fi \
 	fi
 
 # Update dependencies to latest versions
@@ -237,3 +281,11 @@ help:
 	@echo "  docs          - Generate documentation"
 	@echo "  stats         - Show project statistics"
 	@echo "  help          - Show this help message"
+
+# Install dependencies with better error handling
+install-deps: deps
+
+# Safe vet that doesn't fail on warnings
+vet-safe: deps
+	@echo "Running go vet (safe mode)..."
+	-$(GOVET) ./...
