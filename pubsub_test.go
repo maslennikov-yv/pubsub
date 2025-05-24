@@ -43,7 +43,7 @@ func TestNewSubscriber(t *testing.T) {
 		t.Fatal("NewSubscriber() returned nil")
 	}
 
-	if sub.ps != ps {
+	if sub.pubsub != ps {
 		t.Fatal("subscriber not linked to pubsub")
 	}
 
