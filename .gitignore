@@ -1,1 +1,6 @@
-/.idea
+# Output of the go coverage tool, specifically when used with LiteIDE
+coverage.html
+
+# IDE files
+.vscode/
+.idea/
