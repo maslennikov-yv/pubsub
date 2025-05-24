@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"pubsub-timeout"
+	"github.com/maslennikov-yv/pubsub"
 )
 
 func main() {

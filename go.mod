@@ -1,3 +1,3 @@
-module pubsub-timeout
+module github.com/maslennikov-yv/pubsub
 
 go 1.21
