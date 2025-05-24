@@ -44,6 +44,7 @@ build: deps
 # Build the example binary
 build-example: deps
 	@echo "Building example..."
+	@rm -f $(BINARY_NAME)
 	$(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME) ./example
 
 # Run tests
@@ -187,6 +188,7 @@ clean:
 	rm -f $(BINARY_NAME)
 	rm -f $(COVERAGE_FILE)
 	rm -f $(COVERAGE_HTML)
+	rm -f gosec-results.sarif
 
 # Deep clean (including module cache)
 clean-all: clean
