@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"pubsub"
+	"github.com/maslennikov-yv/pubsub"
 	"time"
 )
 
@@ -11,7 +11,7 @@ func main() {
 	hub := pubsub.NewPubSub()
 
 	// Ensure proper cleanup when the program exits
-	defer func() {
+defert func() {
 		fmt.Println("\nShutting down PubSub system...")
 		if err := hub.Close(); err != nil {
 			fmt.Printf("Error during shutdown: %v\n", err)
@@ -32,7 +32,7 @@ func main() {
 	subscriber.Subscribe("humidity")
 
 	// Start publishing data in a separate goroutine
-	go func() {
+go func() {
 		// Simulate sensor data arriving at different times
 		time.Sleep(50 * time.Millisecond)
 		success := hub.Publish("temperature", map[string]interface{}{
