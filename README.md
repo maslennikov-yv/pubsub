@@ -127,8 +127,8 @@ Marks the hub closed, finishes every registered subscriber (waking blocked `Wait
 
 Semantic Versioning. While the major version is 0, a **minor** release may
 contain breaking changes (listed in [CHANGELOG.md](CHANGELOG.md)); a **patch**
-release never does. The upcoming v0.2.0 removes `PubSubError`, the cleanup
-constants and the exported `Topic` type, and changes the behaviour of a
+release never does. v0.2.0 removed `PubSubError`, the cleanup
+constants and the exported `Topic` type, and changed the behaviour of a
 subscriber that completes before `Wait`; see the changelog for details.
 
 ## Development

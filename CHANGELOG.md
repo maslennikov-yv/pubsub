@@ -7,6 +7,8 @@ minor release may contain breaking changes; a patch release never does.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-15
+
 ### Changed
 - **Deterministic core rewrite.** Every operation now runs inside a single
   hub-wide critical section; outcomes depend only on the order of calls, never
@@ -57,6 +59,7 @@ minor release may contain breaking changes; a patch release never does.
 
 - Initial release.
 
-[Unreleased]: https://github.com/maslennikov-yv/pubsub/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/maslennikov-yv/pubsub/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/maslennikov-yv/pubsub/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/maslennikov-yv/pubsub/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/maslennikov-yv/pubsub/releases/tag/v0.1.0
