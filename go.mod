@@ -1,3 +1,3 @@
 module github.com/maslennikov-yv/pubsub
 
-go 1.21
+go 1.26

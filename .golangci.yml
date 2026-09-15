@@ -1,0 +1,50 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: standard
+  enable:
+    - copyloopvar
+    - errorlint
+    - gocritic
+    - gosec
+    - intrange
+    - misspell
+    - modernize
+    - nolintlint
+    - revive
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling
+      - common-false-positives
+    rules:
+      # Tests may use math/rand, unchecked errors and unchecked type assertions.
+      - path: _test\.go$
+        linters:
+          - gosec
+          - errcheck
+          - forcetypeassert
+      # Legacy white-box tests are deliberately kept as written (see AGENTS.md);
+      # do not apply style modernizations to them.
+      - path: ^(pubsub|readme)_test\.go$
+        linters:
+          - intrange
+          - modernize
+          - copyloopvar
+          - revive
+          - gocritic
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+  settings:
+    gofmt:
+      simplify: true

@@ -86,9 +86,9 @@ func TestREADMEOverwriteBehavior(t *testing.T) {
 		<-startPublish // Wait for signal to start publishing
 		// Публикуем несколько значений для одного ключа быстро подряд
 		// до того, как subscriber завершит Wait()
-		hub.Publish("sensor", map[string]interface{}{"value": 10, "timestamp": 1})
-		hub.Publish("sensor", map[string]interface{}{"value": 20, "timestamp": 2})
-		hub.Publish("sensor", map[string]interface{}{"value": 30, "timestamp": 3})
+		hub.Publish("sensor", map[string]any{"value": 10, "timestamp": 1})
+		hub.Publish("sensor", map[string]any{"value": 20, "timestamp": 2})
+		hub.Publish("sensor", map[string]any{"value": 30, "timestamp": 3})
 	}()
 
 	// Start publishing and then immediately wait
@@ -99,7 +99,7 @@ func TestREADMEOverwriteBehavior(t *testing.T) {
 		t.Fatalf("Expected 1 result, got %d", len(results))
 	}
 
-	sensorData := results["sensor"].(map[string]interface{})
+	sensorData := results["sensor"].(map[string]any)
 
 	// Должно быть одно из опубликованных значений (поведение перезаписи)
 	// Поскольку события публикуются быстро, любое из них может быть финальным
@@ -112,7 +112,7 @@ func TestREADMEOverwriteBehavior(t *testing.T) {
 	}
 
 	// Проверяем соответствие timestamp и value
-	expectedPairs := map[interface{}]interface{}{
+	expectedPairs := map[any]any{
 		10: 1,
 		20: 2,
 		30: 3,

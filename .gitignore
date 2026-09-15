@@ -1,5 +1,12 @@
-# Output of the go coverage tool, specifically when used with LiteIDE
+# Test and coverage output
 coverage.*
+*.out
+*.test
+*.prof
+
+# Build output
+dist/
+/pubsub-example*
 
 # IDE files
 .vscode/

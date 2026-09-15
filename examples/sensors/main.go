@@ -1,33 +1,24 @@
+// Command sensors demonstrates collecting readings from several sensors with
+// a single timeout using github.com/maslennikov-yv/pubsub.
 package main
 
 import (
 	"fmt"
-	"github.com/maslennikov-yv/pubsub"
+	"maps"
+	"slices"
 	"time"
+
+	"github.com/maslennikov-yv/pubsub"
 )
 
 func main() {
-	// Create a new pub-sub hub
+	// Create a new pub-sub hub. Close is synchronous and always returns nil.
 	hub := pubsub.NewPubSub()
+	defer hub.Close()
 
-	// Ensure proper cleanup when the program exits
-	defer func() {
-		fmt.Println("\nShutting down PubSub system...")
-		if err := hub.Close(); err != nil {
-			fmt.Printf("Error during shutdown: %v\n", err)
-		} else {
-			fmt.Println("PubSub system shut down successfully")
-		}
-	}()
-
-	// Create a subscriber
+	// Create a subscriber and register the topics we are interested in.
+	// NewSubscriber returns nil only after Close, so no check is needed here.
 	subscriber := hub.NewSubscriber()
-	if subscriber == nil {
-		fmt.Println("Failed to create subscriber - PubSub may be closed")
-		return
-	}
-
-	// Subscribe to topics we're interested in
 	subscriber.Subscribe("temperature")
 	subscriber.Subscribe("humidity")
 
@@ -35,7 +26,7 @@ func main() {
 	go func() {
 		// Simulate sensor data arriving at different times
 		time.Sleep(50 * time.Millisecond)
-		success := hub.Publish("temperature", map[string]interface{}{
+		success := hub.Publish("temperature", map[string]any{
 			"value": 25.5,
 			"unit":  "°C",
 		})
@@ -44,7 +35,7 @@ func main() {
 		}
 
 		time.Sleep(100 * time.Millisecond)
-		success = hub.Publish("humidity", map[string]interface{}{
+		success = hub.Publish("humidity", map[string]any{
 			"value": 60.0,
 			"unit":  "%",
 		})
@@ -57,9 +48,9 @@ func main() {
 	fmt.Println("Waiting for sensor data...")
 	results := subscriber.Wait(1 * time.Second)
 
-	// Display the results
+	// Display the results in a stable order (map iteration order is random).
 	fmt.Printf("Received %d events:\n", len(results))
-	for topic, data := range results {
-		fmt.Printf("  %s: %v\n", topic, data)
+	for _, topic := range slices.Sorted(maps.Keys(results)) {
+		fmt.Printf("  %s: %v\n", topic, results[topic])
 	}
 }

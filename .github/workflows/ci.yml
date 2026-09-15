@@ -2,89 +2,84 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    name: Test
+    name: Test (Go ${{ matrix.go }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
+      fail-fast: false
       matrix:
-        go-version: [1.21, 1.22, 1.23]
-
+        go: ["1.26.x", "1.27.x"]
+        include:
+          # The newest leg also runs the benchmark smoke and publishes coverage.
+          - go: "1.27.x"
+            primary: true
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: ${{ matrix.go }}
           check-latest: true
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-${{ matrix.go-version }}-
-            ${{ runner.os }}-go-
-
-      - name: Install dependencies
-        run: make install-deps
-        timeout-minutes: 2
-
-      - name: Run go fmt
-        run: |
-          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
-            echo "Code is not formatted:"
-            gofmt -s -l .
-            exit 1
-          fi
-        timeout-minutes: 1
-
-      - name: Run go vet
-        run: make vet-safe
-        timeout-minutes: 2
-
-      - name: Run tests
+      - name: gofmt
+        run: make fmt-check
+      - name: go mod tidy -diff
+        run: make tidy-check
+      - name: go vet
+        run: make vet
+      - name: go test -race
         run: make test
-        timeout-minutes: 5
-
-      - name: Run benchmarks
+      - name: Benchmarks (smoke)
+        if: matrix.primary
         run: make bench
-        timeout-minutes: 2
+      - name: Upload coverage
+        if: matrix.primary
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out
 
-#      - name: Upload coverage to Codecov
-#        uses: codecov/codecov-action@v4
-#        with:
-#          file: ./coverage.out
-#          flags: unittests
-#          name: codecov-umbrella
-#          token: ${{ secrets.CODECOV_TOKEN }}
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+
+  vuln:
+    name: Vulnerability check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: stable
+          go-package: ./...
 
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test]
     timeout-minutes: 5
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
-          check-latest: true
-
-      - name: Build
-        run: make build
-        timeout-minutes: 2
+      - run: go build ./...

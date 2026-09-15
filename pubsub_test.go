@@ -117,7 +117,7 @@ func TestMultipleSubscribers(t *testing.T) {
 	sub3.Subscribe("shared-topic")
 
 	var wg sync.WaitGroup
-	results := make([]map[string]interface{}, 3)
+	results := make([]map[string]any, 3)
 
 	// Start all subscribers
 	wg.Add(3)
@@ -409,7 +409,7 @@ func TestConcurrentSubscribers(t *testing.T) {
 
 	numSubscribers := 50
 	var wg sync.WaitGroup
-	results := make([]map[string]interface{}, numSubscribers)
+	results := make([]map[string]any, numSubscribers)
 
 	// Create and start multiple subscribers
 	wg.Add(numSubscribers)
@@ -653,7 +653,7 @@ func TestComplexPayload(t *testing.T) {
 
 	sub.Subscribe("complex-topic")
 
-	complexPayload := map[string]interface{}{
+	complexPayload := map[string]any{
 		"string":  "value",
 		"number":  42,
 		"boolean": true,
@@ -675,7 +675,7 @@ func TestComplexPayload(t *testing.T) {
 	}
 
 	// Verify the complex payload was received correctly
-	received := results["complex-topic"].(map[string]interface{})
+	received := results["complex-topic"].(map[string]any)
 
 	if received["string"] != "value" {
 		t.Fatalf("expected 'value', got %v", received["string"])
@@ -893,10 +893,9 @@ func TestClose(t *testing.T) {
 		t.Fatalf("expected 2 topics, got %d", ps.GetTopicCount())
 	}
 
-	// Close the PubSub - should not return error for inactive subscribers
-	err := ps.Close()
-	if err != nil {
-		t.Logf("close returned error (may be acceptable): %v", err)
+	// Close is synchronous and always returns nil.
+	if err := ps.Close(); err != nil {
+		t.Fatalf("close returned error: %v", err)
 	}
 
 	// Verify closed state
@@ -964,7 +963,7 @@ func TestCloseWithActiveSubscribers(t *testing.T) {
 
 	numSubscribers := 10
 	var wg sync.WaitGroup
-	results := make([]map[string]interface{}, numSubscribers)
+	results := make([]map[string]any, numSubscribers)
 
 	// Start multiple subscribers with long timeouts
 	wg.Add(numSubscribers)
@@ -993,12 +992,12 @@ func TestCloseWithActiveSubscribers(t *testing.T) {
 	err := ps.Close()
 	elapsed := time.Since(start)
 
-	// Close might return an error due to cleanup timeout, but that's acceptable
+	// Close is synchronous and always returns nil.
 	if err != nil {
-		t.Logf("close returned error (acceptable): %v", err)
+		t.Fatalf("close returned error: %v", err)
 	}
 
-	// Close should complete within reasonable time (100ms timeout + buffer)
+	// Close should complete within reasonable time
 	if elapsed > 500*time.Millisecond {
 		t.Fatalf("close took too long: %v", elapsed)
 	}
@@ -1019,17 +1018,18 @@ func TestCloseWithActiveSubscribers(t *testing.T) {
 	}
 }
 
-// TestCloseTimeout tests close timeout behavior
+// TestCloseTimeout checks that Close wakes a Wait blocked on a long timeout
+// and returns promptly without waiting for it.
 func TestCloseTimeout(t *testing.T) {
 	ps := NewPubSub()
 
-	// Create a subscriber that might be slow to clean up
 	sub := ps.NewSubscriber()
 	sub.Subscribe("slow-topic")
 
 	// Start a subscriber with a very long timeout
+	done := make(chan map[string]any, 1)
 	go func() {
-		sub.Wait(10 * time.Second)
+		done <- sub.Wait(10 * time.Second)
 	}()
 
 	// Give subscriber time to start waiting
@@ -1040,18 +1040,27 @@ func TestCloseTimeout(t *testing.T) {
 	err := ps.Close()
 	elapsed := time.Since(start)
 
-	// Should complete within the 100ms timeout plus some buffer
 	if elapsed > 500*time.Millisecond {
 		t.Fatalf("close took too long: %v", elapsed)
 	}
 
-	// Error might be returned if cleanup times out, but that's acceptable
+	// Close is synchronous and always returns nil.
 	if err != nil {
-		t.Logf("close returned error (acceptable): %v", err)
+		t.Fatalf("close returned error: %v", err)
 	}
 
 	if !ps.IsClosed() {
-		t.Fatal("PubSub should be closed even if cleanup timed out")
+		t.Fatal("PubSub should be closed after Close()")
+	}
+
+	// The blocked Wait must have been woken by Close, not by its own timer.
+	select {
+	case res := <-done:
+		if len(res) != 0 {
+			t.Fatalf("expected empty result after close, got %v", res)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Wait was not woken by Close")
 	}
 }
 

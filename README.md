@@ -1,113 +1,147 @@
-# Publish-Subscribe System with Timeout
-## Suitable for Sensor Group Polling
+# pubsub
 
-This is a thread-safe implementation of a publish-subscribe (pub-sub) system in Go that allows subscribers to wait for events with a timeout mechanism. Particularly useful for sensor data polling scenarios where you need to collect responses from multiple sources within a limited time.
+[![Go Reference](https://pkg.go.dev/badge/github.com/maslennikov-yv/pubsub.svg)](https://pkg.go.dev/github.com/maslennikov-yv/pubsub)
+[![CI](https://github.com/maslennikov-yv/pubsub/actions/workflows/ci.yml/badge.svg)](https://github.com/maslennikov-yv/pubsub/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/maslennikov-yv/pubsub)](https://goreportcard.com/report/github.com/maslennikov-yv/pubsub)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**Publish-subscribe with timeout, suitable for polling a group of sensors.**
+
+A small, thread-safe publish-subscribe hub in Go whose subscribers wait for a **set of keyed events** with a timeout. It is built for scenarios like polling a group of sensors: subscribe to one key per sensor, publish readings as they arrive, and `Wait` returns as soon as every key has a value or the timeout elapses, whichever comes first.
+
+The implementation is deterministic: every operation runs inside a single hub-wide critical section, so the outcome of any scenario depends only on the order in which calls happen, never on goroutine scheduling. There are no background goroutines, sleeps, logs, or panics.
+
+[Русская версия](docs/README_RU.md) (English is canonical.)
+
+## Install
+
+```sh
+go get github.com/maslennikov-yv/pubsub@latest
+```
+
+Requires Go 1.26 or newer. No dependencies outside the standard library.
 
 ## Key Features
 
-### 1. **Simple API Design**
-- Create hub and subscribers with minimal configuration
-- Subscribe to events by string keys
-- Wait for events with configurable timeout
-- Publish events with success/failure return status
-
-### 2. **Timeout Behavior**
-- If all subscribed events occur before timeout: immediately returns complete results
-- If timeout occurs: returns only events that were received in time
-- Non-blocking operation with graceful degradation
-
-### 3. **Event Overwriting**
-- If the same key receives multiple events during the timeout period, only the latest event is preserved
-- This prevents stale data and ensures subscribers receive the most recent information
-
-### 4. **Publisher Feedback**
-- `Publish()` returns `true` if at least one subscriber received the event
-- `Publish()` returns `false` if no one is listening to that key
-- Allows publishers to know if their messages are being consumed
+- **Simple API.** Create a hub and subscribers, subscribe by string key, wait with a timeout, publish with a boolean result.
+- **Early return or partial result.** `Wait` returns immediately once every subscribed key has a value; on timeout it returns whatever arrived in time.
+- **Latest value wins.** If a key is published several times while the subscriber is live, only the most recent payload is kept.
+- **Exact publisher feedback.** `Publish` returns `true` if and only if at least one live subscriber stored the payload. A `true` result guarantees the payload will appear in that subscriber's `Wait` result (unless a later `true` publish overwrote it); a `false` result guarantees nobody saw it.
+- **Synchronous, idempotent `Close`.** Wakes every blocked `Wait` immediately, drops all topics, always returns `nil`.
 
 ## Usage Example
 
 ```go
-// Create pub-sub hub
-hub := NewPubSub()
-subscriber := hub.NewSubscriber()
+hub := pubsub.NewPubSub()
+defer hub.Close()
 
-// Subscribe to events by string key
+subscriber := hub.NewSubscriber()
 subscriber.Subscribe("foo")
 subscriber.Subscribe("buz")
 
-// Wait up to 1 second for events
-results := subscriber.Wait(time.Second * 1)
+// Publishers usually run in other goroutines while Wait blocks.
+go func() {
+    hub.Publish("foo", map[string]int{"foo": 90})  // true
+    hub.Publish("foo", map[string]int{"foo": 100}) // true, overwrites 90
+    hub.Publish("bar", map[string]int{"bar": 50})  // false: nobody listens to "bar"
+}()
 
-// Publish events from other goroutines
-hub.Publish("foo", map[string]int{"foo": 90})  // returns true
-hub.Publish("foo", map[string]int{"foo": 100}) // returns true (overwrites previous)
-hub.Publish("bar", map[string]int{"bar": 50})  // returns false (no subscribers)
+// Wait up to 1 second. "buz" never arrives, so Wait returns on timeout.
+results := subscriber.Wait(time.Second)
 
-// Results will contain: {"foo": {"foo": 100}}
-// Note: "buz" is not in results because nothing was published for it
-// Note: "foo" contains the latest value (100, not 90)
+// results == map[string]any{"foo": map[string]int{"foo": 100}}
+// "buz" is absent: nothing was published for it.
+// "foo" holds the latest value (100, not 90).
 ```
 
-## Architecture Benefits
+A runnable version lives in [`examples/sensors/main.go`](examples/sensors/main.go); a deterministic variant is the godoc `Example` in [`example_test.go`](example_test.go).
 
-### **Thread Safety**
-- All operations are protected by mutexes to prevent race conditions
-- Safe for concurrent use across multiple goroutines
-- Proper synchronization using WaitGroups
+## Semantics
 
-### **Memory Management**
-- Automatic cleanup of unused topics and subscribers
-- Prevents memory leaks through timeout-based cleanup
-- Graceful shutdown capabilities
+### Subscriber lifecycle
 
-### **Error Resilience**
-- Panic recovery in goroutines with logging
-- Graceful degradation when components are closed
-- Warning logs instead of crashes for invalid operations
+A subscriber is **live** from `NewSubscriber` until it **finishes**. Finishing is a single, atomic, terminal transition: the subscriber stops accepting messages and is removed from every topic (topics left empty are deleted). It happens at exactly one of these moments:
+
+1. **Entry to `Wait`**, if the hub is closed, the timeout is `<= 0`, or the subscriber is already *complete* (every subscribed key has a value; a subscriber with no subscriptions is trivially complete and returns at once).
+2. **A `Publish` that makes the subscriber complete while a `Wait` is blocked.**
+3. **Expiry of a blocked `Wait`'s timer.**
+4. **`Close`.**
+
+Becoming complete *before* `Wait` is called is **not** a trigger: the subscriber stays live, keeps accepting overwrites, and accepts further `Subscribe` calls. So `Subscribe(a); Publish(a); Subscribe(b)` works as expected: `Wait` will require both `a` and `b`.
+
+A subscriber is **single-use**. After it finishes, `Subscribe` is a no-op and every further `Wait` returns the same snapshot immediately without blocking. Concurrent `Wait` calls on one subscriber all return that snapshot as soon as the first of them finishes it, so the effective timeout is the shortest one.
+
+### `Subscribe(key)`
+
+Registers interest in `key`. It is a no-op on a `nil` subscriber, a closed hub, a finished subscriber, or a key that is already subscribed. It takes effect even while a `Wait` on this subscriber is blocked, extending the set of keys `Wait` requires.
+
+### `Publish(key, payload) bool`
+
+Delivers `payload` to every live subscriber of `key`, replacing any earlier payload for that key. Returns `true` if at least one subscriber received it, `false` if the hub is closed or nobody is subscribed.
+
+Consequences:
+
+- **Latest wins while live.** Overwrites are accepted until the subscriber finishes.
+- **Once `Wait` is in progress, it returns at the first moment of completeness**, and from then on the subscriber accepts nothing (`Publish` returns `false` if it was the only subscriber).
+- A subscriber that has collected everything but **never calls `Wait` stays registered** until `Close`; publishes to it keep returning `true`. Cleanup happens only on `Wait` or `Close`.
+
+### `Wait(timeout) map[string]any`
+
+Blocks until every subscribed key has a value, `timeout` elapses, or the hub closes; then finishes the subscriber and returns a **copy** of the results. Keys that received nothing are absent. `timeout <= 0` returns immediately with whatever has arrived. `Wait` on a `nil` subscriber returns an empty map.
+
+The linearization point of `Wait` is its finalization. A payload published in the tiny window between the timer expiring and finalization is included in the result, and that `Publish` returned `true`, so results and return values are always mutually consistent.
+
+### `Close() error`
+
+Marks the hub closed, finishes every registered subscriber (waking blocked `Wait` calls immediately with whatever they collected so far), and drops all topics. Synchronous, idempotent, O(subscribers), always returns `nil`. Afterwards `NewSubscriber` returns `nil`, `Publish` returns `false`, `Subscribe` is a no-op, and `Wait` never blocks.
+
+## API
+
+| Method | Purpose |
+|---|---|
+| `NewPubSub() *PubSub` | Create an open hub. |
+| `(*PubSub).NewSubscriber() *Subscriber` | Create a live subscriber; `nil` after `Close`. |
+| `(*Subscriber).Subscribe(key string)` | Register interest in a key. |
+| `(*Subscriber).Wait(timeout time.Duration) map[string]any` | Collect results. |
+| `(*PubSub).Publish(key string, payload any) bool` | Deliver a payload. |
+| `(*PubSub).Close() error` | Shut down; always `nil`. |
+| `(*PubSub).IsClosed() bool` | Whether `Close` was called. |
+| `(*PubSub).GetTopicCount() int` | Keys with at least one live subscriber. |
+| `(*PubSub).GetSubscriberCount(key string) int` | Live subscribers of a key. |
+| `(*PubSub).Hash(key string) string` | Hex MD5 of a key, for fixed-length topic names (not a security primitive). |
+
+## Guarantees
+
+- **Thread safety.** All methods may be called concurrently from any goroutine. A single hub-wide `RWMutex` guards all state; there is no lock hierarchy to invert. The flip side is that every call, including `Publish` on unrelated keys, is serialized per hub; if you need parallel fan-out, shard across several `PubSub` instances.
+- **No hidden concurrency.** The library starts no goroutines and never sleeps. `Close` and `Wait` finalization are synchronous.
+- **No panics, no logs.** For values obtained from `NewPubSub` and `NewSubscriber` (including the `nil` subscriber returned after `Close`), invalid operations are safe no-ops with defined return values. Zero-value structs and a `nil *PubSub` are not supported.
+- **Memory.** A subscriber is detached from all topics when it finishes; empty topics are deleted. A subscriber that never calls `Wait` is released by `Close`.
 
 ## Use Cases
 
-1. **Sensor Data Collection**: Poll multiple sensors and collect responses within a time window
-2. **Microservice Communication**: Wait for responses from multiple services with timeout
-3. **Event Aggregation**: Collect events from various sources before processing
-4. **Real-time Monitoring**: Gather status updates from distributed components
-5. **Batch Processing**: Collect data items until timeout or completion
+1. **Sensor data collection.** Poll several sensors and collect their responses within a time window.
+2. **Fan-in with timeout.** Wait for replies from multiple services, accepting a partial set.
+3. **Event aggregation.** Gather the latest state from several sources before processing.
 
-This implementation provides a reliable foundation for event-driven architectures where timing and reliability are critical.
+## Versioning
 
-## Creating a Subscriber
-```go
-hub := NewPubSub()
-subscriber := hub.NewSubscriber()
+Semantic Versioning. While the major version is 0, a **minor** release may
+contain breaking changes (listed in [CHANGELOG.md](CHANGELOG.md)); a **patch**
+release never does. The upcoming v0.2.0 removes `PubSubError`, the cleanup
+constants and the exported `Topic` type, and changes the behaviour of a
+subscriber that completes before `Wait`; see the changelog for details.
+
+## Development
+
+```sh
+make check     # gofmt, go vet, go mod tidy -diff, golangci-lint, go test -race, benchmark smoke run
+make test      # tests with the race detector and coverage
+make bench     # benchmark smoke run
+make example   # run examples/sensors
 ```
 
-## Subscribing to Events by Text Key
-```go
-subscriber.Subscribe("foo")
-subscriber.Subscribe("buz")
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
 
-## Waiting Until Timeout
-```go
-results := subscriber.Wait(time.Second * 1)
-```
+## License
 
-If all events that the subscriber is subscribed to happen before the timeout, we finish waiting and return the result.
-
-If a timeout occurs, we return only those events that managed to happen.
-
-When publishing events that no one is subscribed to, false is returned, or true if the event was read by at least one subscriber.
-
-If during the timeout period an event with the same key occurred twice or more, the subscriber receives the latest event by time.
-
-## Publishing Events
-```go
-hub.Publish("foo", map[string]int{"foo":90}) // true
-hub.Publish("foo", map[string]int{"foo":100}) // true
-hub.Publish("bar", map[string]int{"bar":50}) // false
-
-/*
-results:
-{"foo":100}
-*/
+[MIT](LICENSE)
