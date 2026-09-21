@@ -1,5 +1,5 @@
-// Package pubsub implements a small, deterministic publish/subscribe hub
-// whose subscribers wait for a set of keyed events with a timeout.
+// Package pubsub implements a small, linearizable publish/subscribe hub whose
+// subscribers wait for a set of keyed events with a timeout.
 //
 // A typical use is polling a group of sensors: subscribe to one key per
 // sensor, publish each reading as it arrives, and Wait returns as soon as
@@ -67,9 +67,11 @@
 // timeout is <= 0. That is not the shortest timeout: a Wait(50ms) started
 // later than a Wait(100ms) has the later deadline and is cut off by it. A Wait
 // started after the subscriber finished changes nothing. A woken Wait must
-// re-acquire the lock before returning, so it never returns before its
-// governing deadline. Cleanup happens only on Wait or Close; a subscriber that
-// never calls Wait stays registered until Close.
+// re-acquire the lock before returning, so no Wait outlives that earliest
+// deadline - though any Wait can of course return sooner, when a Publish
+// completes the subscriber or Close intervenes. Cleanup happens only on Wait
+// or Close; a registered subscriber that never calls Wait stays registered
+// until Close.
 //
 // IsClosed, GetTopicCount and GetSubscriberCount are observers and Hash is a
 // pure helper. The two counters report live subscribers and the keys they

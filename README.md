@@ -138,6 +138,7 @@ make check     # gofmt, go vet, go mod tidy -diff, golangci-lint, go test -race,
 make test      # tests with the race detector and coverage
 make bench     # benchmark smoke run
 make example   # run examples/sensors
+make example-check  # the example's stdout must match examples/sensors/testdata/golden.txt
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).

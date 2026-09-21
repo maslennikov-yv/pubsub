@@ -223,7 +223,10 @@ func (ps *PubSub) topicLocked(key string) *topic {
 // finished subscriber left attached to a topic would panic on the second
 // close(waitCh); with it, Close silently fails to detach that subscriber and
 // ps.topics never empties. assertNoFinishedInTopics in contract_test.go is the
-// detector that replaces the panic - keep it wired into the stress tests.
+// detector that replaces the panic - keep it called while live and finished
+// subscribers still share topics (mid-run in the stress test, and in
+// TestPublishLeavesMultiTopicWaitersAttached). A call made after Close sees an
+// empty ps.topics and detects nothing.
 //
 // Constraint on this function: Publish and Close call it while ranging over
 // topic.subscribers and ps.topics. It must only delete s itself (and topics

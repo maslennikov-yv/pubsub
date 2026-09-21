@@ -134,6 +134,7 @@ make check     # gofmt, go vet, go mod tidy -diff, golangci-lint, go test -race,
 make test      # тесты с детектором гонок и покрытием
 make bench     # smoke-прогон бенчмарков
 make example   # запустить examples/sensors
+make example-check  # вывод примера должен совпадать с examples/sensors/testdata/golden.txt
 ```
 
 См. [CONTRIBUTING.md](../CONTRIBUTING.md) и [AGENTS.md](../AGENTS.md).

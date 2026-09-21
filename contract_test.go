@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// These tests pin the deterministic contract documented in the package
+// These tests pin the behavioural contract documented in the package
 // comment. Timing assertions use only generous upper bounds so they stay
 // stable under -race and on slow CI runners.
 
@@ -501,6 +501,11 @@ func TestStressCloseSubscribePublishWait(t *testing.T) {
 				for k := range 5 {
 					ps.Publish(fmt.Sprintf("k%d", r.Intn(8)), k)
 				}
+				// Sample the invariant here, mid-run: this is the window the
+				// check exists for, when finished and live subscribers share
+				// the same topics. The post-Close call below sees an empty
+				// ps.topics and inspects nothing.
+				assertNoFinishedInTopics(t, ps)
 				sub.Wait(time.Duration(r.Intn(3)) * time.Millisecond)
 			}(sub, int64(i*100+j))
 		}
@@ -555,9 +560,13 @@ func bubbledWait(sub *Subscriber, timeout time.Duration) func() (map[string]any,
 // assertNoFinishedInTopics pins the invariant that finishLocked's idempotence
 // guard would otherwise hide: a finished subscriber must never stay attached to
 // a topic. Without the guard that situation panics on the second close(waitCh);
-// with it, Close silently fails to detach and ps.topics never empties. Call it
-// while live and finished subscribers coexist - after Close it is trivially
-// satisfied.
+// with it, Close silently fails to detach and ps.topics never empties.
+//
+// It only detects anything while live and finished subscribers coexist, so it
+// has to be called mid-run: once Close has returned, ps.topics is empty and the
+// loop body never executes. The call sites that carry it are the worker in
+// TestStressCloseSubscribePublishWait and TestPublishLeavesMultiTopicWaitersAttached;
+// the post-Close calls are cheap belt-and-braces, not the detector.
 func assertNoFinishedInTopics(t *testing.T, ps *PubSub) {
 	t.Helper()
 	ps.mu.RLock()
@@ -657,7 +666,11 @@ func TestCloseLeavesZeroSubscriptionSubscriberLive(t *testing.T) {
 		t.Fatal("Close finished a subscriber that holds no subscription")
 	}
 
-	res := sub.Wait(time.Hour) // must not block, and must finish it now
+	// Run it in a goroutine with a bounded receive: if this ever regresses to
+	// blocking, the test fails within `generous` instead of hanging for the
+	// whole package timeout.
+	out, _ := waitInGoroutine(t, sub, time.Hour) // must not block, and must finish it now
+	res := recvWithin(t, out)
 	if len(res) != 0 {
 		t.Fatalf("expected empty results, got %v", res)
 	}

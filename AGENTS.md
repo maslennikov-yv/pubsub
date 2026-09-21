@@ -46,7 +46,10 @@ make example-check # the example's output must match examples/sensors/testdata/g
   created once and never replaced. `finishLocked` is idempotent, so callers do
   not check `done` first - but that guard *masks* a broken invariant instead of
   panicking on it, which is why `assertNoFinishedInTopics` in
-  `contract_test.go` must stay wired into the stress tests.
+  `contract_test.go` must stay called **while live and finished subscribers
+  still share topics** (mid-run in `TestStressCloseSubscribePublishWait`, and in
+  `TestPublishLeavesMultiTopicWaitersAttached`). After `Close` returns,
+  `ps.topics` is empty and the check inspects nothing.
 - **`results ⊆ subscriptions`**, so completeness is `len(results) == len(subscriptions)`.
 - **`Publish` runs under the write lock** and its boolean is exact: `true` iff
   at least one live subscriber stored the payload.

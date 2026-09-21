@@ -7,7 +7,7 @@ COVERAGE_FILE = coverage.out
 .PHONY: help test cover bench fmt fmt-check vet lint vuln tidy-check check example example-check clean
 
 help: ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
 
 test: ## Run tests with the race detector and collect coverage
 	go test -race -count=1 -coverprofile=$(COVERAGE_FILE) ./...
