@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -338,6 +339,7 @@ func TestCloseReturnsNilWithActiveWaiters(t *testing.T) {
 			t.Fatalf("iteration %d: Close returned %v", i, err)
 		}
 		wg.Wait()
+		assertNoFinishedInTopics(t, ps)
 		if ps.GetTopicCount() != 0 {
 			t.Fatalf("iteration %d: %d topics after close", i, ps.GetTopicCount())
 		}
@@ -469,6 +471,7 @@ func TestNoGoroutineLeakAfterClose(t *testing.T) {
 		if err := ps.Close(); err != nil {
 			t.Fatalf("iteration %d: Close returned %v", i, err)
 		}
+		assertNoFinishedInTopics(t, ps)
 	}
 	finished := make(chan struct{})
 	go func() { wg.Wait(); close(finished) }()
@@ -521,8 +524,330 @@ func TestStressCloseSubscribePublishWait(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("iteration %d: deadlock (Close did not return)", i)
 		}
+		assertNoFinishedInTopics(t, ps)
 		if ps.GetTopicCount() != 0 {
 			t.Fatalf("iteration %d: %d topics left after Close", i, ps.GetTopicCount())
 		}
 	}
+}
+
+// --- helpers for the bubbled (fake-clock) tests ----------------------------
+
+// bubbledWait is the synctest counterpart of waitInGoroutine: it starts
+// sub.Wait(timeout) in a bubbled goroutine and returns a probe that quiesces
+// the bubble and reports whether that Wait has returned. waitInGoroutine
+// cannot be used inside a bubble because its poll loop sleeps, and every sleep
+// would advance the fake clock into the pending timer.
+func bubbledWait(sub *Subscriber, timeout time.Duration) func() (map[string]any, bool) {
+	out := make(chan map[string]any, 1) // buffered: the waiter never blocks on send
+	go func() { out <- sub.Wait(timeout) }()
+	return func() (map[string]any, bool) {
+		synctest.Wait()
+		select {
+		case res := <-out:
+			return res, true
+		default:
+			return nil, false
+		}
+	}
+}
+
+// assertNoFinishedInTopics pins the invariant that finishLocked's idempotence
+// guard would otherwise hide: a finished subscriber must never stay attached to
+// a topic. Without the guard that situation panics on the second close(waitCh);
+// with it, Close silently fails to detach and ps.topics never empties. Call it
+// while live and finished subscribers coexist - after Close it is trivially
+// satisfied.
+func assertNoFinishedInTopics(t *testing.T, ps *PubSub) {
+	t.Helper()
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	for key, topic := range ps.topics {
+		for s := range topic.subscribers {
+			if s.done {
+				t.Errorf("finished subscriber still attached to topic %q", key)
+			}
+		}
+	}
+}
+
+// assertFinished pins the rest of the terminal transition: a finished
+// subscriber has a closed waitCh and is no longer marked as waiting. The
+// waiting half is not observable through the public API, and finishLocked's
+// idempotence guard makes a stale waiting flag silent rather than fatal, so it
+// needs pinning here.
+func assertFinished(t *testing.T, sub *Subscriber) {
+	t.Helper()
+	ps := sub.pubsub
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	if !sub.done {
+		t.Fatal("subscriber is not finished")
+	}
+	if sub.waiting {
+		t.Error("finished subscriber is still marked as waiting")
+	}
+	select {
+	case <-sub.waitCh:
+	default:
+		t.Error("finished subscriber has an open waitCh")
+	}
+}
+
+// --- the effective timeout is the earliest deadline, not the shortest ------
+
+// TestStaggeredWaitsUseEarliestDeadline is the counterexample to "the effective
+// timeout is the shortest one": a Wait(50ms) started at t=80ms has a later
+// deadline (t=130ms) than a Wait(100ms) started at t=0, so the nominally
+// longer timeout is the one that governs.
+func TestStaggeredWaitsUseEarliestDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ps := NewPubSub()
+		sub := ps.NewSubscriber()
+		sub.Subscribe("a") // never published
+
+		start := time.Now()
+		long := bubbledWait(sub, 100*time.Millisecond) // deadline t=100ms
+		if _, done := long(); done {
+			t.Fatal("the 100ms Wait returned immediately")
+		}
+
+		time.Sleep(80 * time.Millisecond)
+		short := bubbledWait(sub, 50*time.Millisecond) // deadline t=130ms
+		if _, done := short(); done {
+			t.Fatal("the 50ms Wait returned immediately")
+		}
+		if _, done := long(); done {
+			t.Fatal("the 100ms Wait returned before its deadline")
+		}
+
+		time.Sleep(20 * time.Millisecond) // t=100ms: the 100ms Wait's timer
+		resLong, doneLong := long()
+		resShort, doneShort := short()
+		if !doneLong || !doneShort {
+			t.Fatalf("at t=%v: 100ms done=%v, 50ms done=%v; both must have returned",
+				time.Since(start), doneLong, doneShort)
+		}
+		if elapsed := time.Since(start); elapsed != 100*time.Millisecond {
+			t.Fatalf("both Waits returned at %v, want exactly 100ms", elapsed)
+		}
+		if len(resLong) != 0 || len(resShort) != 0 {
+			t.Fatalf("expected empty snapshots, got %v and %v", resLong, resShort)
+		}
+		assertFinished(t, sub) // finished by its timer
+	})
+}
+
+// --- Close and the subscriber that never subscribed ------------------------
+
+// TestCloseLeavesZeroSubscriptionSubscriberLive pins the qualifier in the
+// contract: Close reaches subscribers through ps.topics, so one that never
+// subscribed is not registered anywhere and stays live until its first Wait.
+func TestCloseLeavesZeroSubscriptionSubscriberLive(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.NewSubscriber()
+
+	if err := ps.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	ps.mu.RLock()
+	done := sub.done
+	ps.mu.RUnlock()
+	if done {
+		t.Fatal("Close finished a subscriber that holds no subscription")
+	}
+
+	res := sub.Wait(time.Hour) // must not block, and must finish it now
+	if len(res) != 0 {
+		t.Fatalf("expected empty results, got %v", res)
+	}
+	ps.mu.RLock()
+	done = sub.done
+	ps.mu.RUnlock()
+	if !done {
+		t.Fatal("Wait after Close did not finish the subscriber")
+	}
+	assertFinished(t, sub) // finished on entry to Wait
+}
+
+// --- Wait returns a shallow copy -------------------------------------------
+
+// TestWaitCopyIsShallow pins that payloads are shared by reference: only the
+// results map itself is copied.
+func TestWaitCopyIsShallow(t *testing.T) {
+	ps := NewPubSub()
+	defer ps.Close()
+
+	payload := map[string]int{"n": 1}
+	subA, subB := ps.NewSubscriber(), ps.NewSubscriber()
+	subA.Subscribe("a")
+	subB.Subscribe("a")
+	if !ps.Publish("a", payload) {
+		t.Fatal("Publish must return true")
+	}
+
+	resA := subA.Wait(0)
+	got, ok := resA["a"].(map[string]int)
+	if !ok {
+		t.Fatalf("unexpected payload type %T", resA["a"])
+	}
+	got["n"] = 2
+
+	resB := subB.Wait(0)
+	shared, ok := resB["a"].(map[string]int)
+	if !ok {
+		t.Fatalf("unexpected payload type %T", resB["a"])
+	}
+	if shared["n"] != 2 {
+		t.Fatalf("payload is not shared: second subscriber sees %d, want 2", shared["n"])
+	}
+	if payload["n"] != 2 {
+		t.Fatalf("payload is not shared with the publisher: %d, want 2", payload["n"])
+	}
+}
+
+// --- a nil payload is a value, not an absence ------------------------------
+
+// TestNilPayloadIsPresent pins that only the comma-ok form distinguishes
+// "received nil" from "received nothing".
+func TestNilPayloadIsPresent(t *testing.T) {
+	ps := NewPubSub()
+	defer ps.Close()
+
+	sub := ps.NewSubscriber()
+	sub.Subscribe("a")
+	sub.Subscribe("b") // never published
+	if !ps.Publish("a", nil) {
+		t.Fatal("Publish of a nil payload must return true")
+	}
+
+	res := sub.Wait(0)
+	if _, ok := res["a"]; !ok {
+		t.Fatalf("key a must be present with a nil value, got %v", res)
+	}
+	if _, ok := res["b"]; ok {
+		t.Fatalf("key b never received anything and must be absent, got %v", res)
+	}
+	if len(res) != 1 {
+		t.Fatalf("expected exactly one key, got %v", res)
+	}
+}
+
+// --- the nil subscriber actually returned by NewSubscriber -----------------
+
+func TestNilSubscriberFromClosedHub(t *testing.T) {
+	ps := NewPubSub()
+	if err := ps.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	sub := ps.NewSubscriber()
+	if sub != nil {
+		t.Fatalf("NewSubscriber on a closed hub returned %v, want nil", sub)
+	}
+
+	sub.Subscribe("a") // no-op on the typed nil
+	for _, d := range []time.Duration{-1, 0, time.Hour} {
+		res := sub.Wait(d)
+		if res == nil || len(res) != 0 {
+			t.Fatalf("Wait(%v) = %v, want a non-nil empty map", d, res)
+		}
+		res["x"] = 1 // every call must hand back a fresh map
+	}
+	if ps.GetTopicCount() != 0 || ps.GetSubscriberCount("a") != 0 {
+		t.Fatalf("state leaked: %d topics, %d subscribers",
+			ps.GetTopicCount(), ps.GetSubscriberCount("a"))
+	}
+}
+
+// --- Publish deleting the topic while ranging over its subscribers ---------
+
+// TestPublishCompletesEveryWaiterOnOneKey drives the case the comment in
+// Publish defends: finishLocked deletes the current entry of the map being
+// ranged and, on the last subscriber, drops the key from ps.topics.
+func TestPublishCompletesEveryWaiterOnOneKey(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const n = 16
+		ps := NewPubSub()
+		subs := make([]*Subscriber, n)
+		probes := make([]func() (map[string]any, bool), n)
+		for i := range n {
+			sub := ps.NewSubscriber()
+			sub.Subscribe("k")
+			subs[i] = sub
+			probes[i] = bubbledWait(sub, time.Hour)
+		}
+		probes[0]()
+		if got := ps.GetSubscriberCount("k"); got != n {
+			t.Fatalf("GetSubscriberCount(k) = %d, want %d", got, n)
+		}
+
+		if !ps.Publish("k", 1) {
+			t.Fatal("Publish must return true")
+		}
+		for i := range n {
+			res, done := probes[i]()
+			if !done || len(res) != 1 || res["k"] != 1 {
+				t.Fatalf("subscriber %d: done=%v res=%v", i, done, res)
+			}
+			assertFinished(t, subs[i]) // finished by the Publish that completed it
+		}
+		assertNoFinishedInTopics(t, ps)
+		if ps.GetTopicCount() != 0 {
+			t.Fatalf("expected 0 topics, got %d", ps.GetTopicCount())
+		}
+		if ps.Publish("k", 2) {
+			t.Fatal("Publish after every subscriber finished must return false")
+		}
+	})
+}
+
+// TestPublishLeavesMultiTopicWaitersAttached is the mixed state the
+// idempotence guard could hide: half the waiters finish on this Publish while
+// the other half stay live in the same topic.
+func TestPublishLeavesMultiTopicWaitersAttached(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const n = 8
+		ps := NewPubSub()
+		subs := make([]*Subscriber, n)
+		probes := make([]func() (map[string]any, bool), n)
+		for i := range n {
+			sub := ps.NewSubscriber()
+			sub.Subscribe("k")
+			if i%2 == 1 {
+				sub.Subscribe("extra") // Publish("k") cannot complete these
+			}
+			subs[i] = sub
+			probes[i] = bubbledWait(sub, time.Hour)
+		}
+		probes[0]()
+
+		if !ps.Publish("k", 1) {
+			t.Fatal("Publish must return true")
+		}
+		assertNoFinishedInTopics(t, ps)
+		for i := range n {
+			_, done := probes[i]()
+			if want := i%2 == 0; done != want {
+				t.Fatalf("subscriber %d: returned=%v, want %v", i, done, want)
+			}
+		}
+		if got := ps.GetSubscriberCount("k"); got != n/2 {
+			t.Fatalf("GetSubscriberCount(k) = %d, want %d", got, n/2)
+		}
+
+		if err := ps.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+		for i := 1; i < n; i += 2 {
+			res, done := probes[i]()
+			if !done || len(res) != 1 || res["k"] != 1 {
+				t.Fatalf("subscriber %d: done=%v res=%v", i, done, res)
+			}
+			assertFinished(t, subs[i]) // finished by Close
+		}
+		assertNoFinishedInTopics(t, ps)
+		if ps.GetTopicCount() != 0 {
+			t.Fatalf("expected 0 topics after Close, got %d", ps.GetTopicCount())
+		}
+	})
 }

@@ -9,7 +9,7 @@
 
 A small, thread-safe publish-subscribe hub in Go whose subscribers wait for a **set of keyed events** with a timeout. It is built for scenarios like polling a group of sensors: subscribe to one key per sensor, publish readings as they arrive, and `Wait` returns as soon as every key has a value or the timeout elapses, whichever comes first.
 
-The implementation is deterministic: every operation runs inside a single hub-wide critical section, so the outcome of any scenario depends only on the order in which calls happen, never on goroutine scheduling. There are no background goroutines, sleeps, logs, or panics.
+The hub is linearizable: every operation applies its effect inside a single hub-wide critical section, so the outcome of a scenario depends on the order in which calls acquire that section, not on how their goroutines interleave inside it. Two qualifications: `Wait` releases the lock while it is parked, and a blocked `Wait` is woken by a wall-clock timer whose expiry is not ordered against concurrent calls (the linearization rule for `Wait` keeps the results consistent either way). There are no background goroutines, sleeps, logs, or panics.
 
 [Русская версия](docs/README_RU.md) (English is canonical.)
 
@@ -69,7 +69,7 @@ A subscriber is **live** from `NewSubscriber` until it **finishes**. Finishing i
 
 Becoming complete *before* `Wait` is called is **not** a trigger: the subscriber stays live, keeps accepting overwrites, and accepts further `Subscribe` calls. So `Subscribe(a); Publish(a); Subscribe(b)` works as expected: `Wait` will require both `a` and `b`.
 
-A subscriber is **single-use**. After it finishes, `Subscribe` is a no-op and every further `Wait` returns the same snapshot immediately without blocking. Concurrent `Wait` calls on one subscriber all return that snapshot as soon as the first of them finishes it, so the effective timeout is the shortest one.
+A subscriber is **single-use**. After it finishes, `Subscribe` is a no-op and every further `Wait` returns the same snapshot immediately without blocking. Concurrent `Wait` calls on one subscriber all return that snapshot as soon as the first of them finishes it, so what governs is the **earliest deadline** among the `Wait` calls started while the subscriber was live -- a deadline being the moment a `Wait` was entered plus its timeout, or the moment of the call itself when the timeout is `<= 0`. That is *not* the shortest timeout: a `Wait(50ms)` started after a `Wait(100ms)` has the later deadline and is cut off by it. A `Wait` started after the subscriber finished changes nothing.
 
 ### `Subscribe(key)`
 
@@ -77,7 +77,7 @@ Registers interest in `key`. It is a no-op on a `nil` subscriber, a closed hub, 
 
 ### `Publish(key, payload) bool`
 
-Delivers `payload` to every live subscriber of `key`, replacing any earlier payload for that key. Returns `true` if at least one subscriber received it, `false` if the hub is closed or nobody is subscribed.
+Delivers `payload` to every live subscriber of `key`, replacing any earlier payload for that key. Returns `true` if at least one subscriber received it, `false` if the hub is closed or nobody is subscribed. Cost is `O(subscribers of the key)`, plus `O(total subscriptions)` for any subscriber the call completes, all under the write lock.
 
 Consequences:
 
@@ -87,13 +87,13 @@ Consequences:
 
 ### `Wait(timeout) map[string]any`
 
-Blocks until every subscribed key has a value, `timeout` elapses, or the hub closes; then finishes the subscriber and returns a **copy** of the results. Keys that received nothing are absent. `timeout <= 0` returns immediately with whatever has arrived. `Wait` on a `nil` subscriber returns an empty map.
+Blocks until every subscribed key has a value, `timeout` elapses, or the hub closes; then finishes the subscriber and returns a copy of the results. The copy is **shallow**: payloads come back exactly as they were published, so every subscriber of a key -- and the publisher -- hold the same value. Keys that received nothing are absent, but a key published with a `nil` payload is *present* with a `nil` value, so only the comma-ok form (`v, ok := res[k]`) distinguishes the two. `timeout <= 0` returns immediately with whatever has arrived -- and finishes the subscriber. `Wait` on a `nil` subscriber returns an empty map.
 
 The linearization point of `Wait` is its finalization. A payload published in the tiny window between the timer expiring and finalization is included in the result, and that `Publish` returned `true`, so results and return values are always mutually consistent.
 
 ### `Close() error`
 
-Marks the hub closed, finishes every registered subscriber (waking blocked `Wait` calls immediately with whatever they collected so far), and drops all topics. Synchronous, idempotent, O(subscribers), always returns `nil`. Afterwards `NewSubscriber` returns `nil`, `Publish` returns `false`, `Subscribe` is a no-op, and `Wait` never blocks.
+Marks the hub closed, finishes every **registered** subscriber -- one holding at least one subscription -- waking blocked `Wait` calls immediately with whatever they collected so far, and drops all topics. A subscriber that never called `Subscribe` is in no topic, so `Close` does not reach it: it stays live and finishes on its first `Wait`, which cannot block. Synchronous, idempotent, `O(total subscriptions)`, always returns `nil`. Afterwards `NewSubscriber` returns `nil`, `Publish` returns `false`, `Subscribe` is a no-op, and `Wait` never blocks.
 
 ## API
 
@@ -106,16 +106,16 @@ Marks the hub closed, finishes every registered subscriber (waking blocked `Wait
 | `(*PubSub).Publish(key string, payload any) bool` | Deliver a payload. |
 | `(*PubSub).Close() error` | Shut down; always `nil`. |
 | `(*PubSub).IsClosed() bool` | Whether `Close` was called. |
-| `(*PubSub).GetTopicCount() int` | Keys with at least one live subscriber. |
-| `(*PubSub).GetSubscriberCount(key string) int` | Live subscribers of a key. |
-| `(*PubSub).Hash(key string) string` | Hex MD5 of a key, for fixed-length topic names (not a security primitive). |
+| `(*PubSub).GetTopicCount() int` | Keys with at least one live subscriber (advisory: stale on return). |
+| `(*PubSub).GetSubscriberCount(key string) int` | Live subscribers of a key (advisory: stale on return). |
+| `(*PubSub).Hash(key string) string` | Hex MD5 of a key, for fixed-length topic names; ignores the receiver, not a security primitive. |
 
 ## Guarantees
 
 - **Thread safety.** All methods may be called concurrently from any goroutine. A single hub-wide `RWMutex` guards all state; there is no lock hierarchy to invert. The flip side is that every call, including `Publish` on unrelated keys, is serialized per hub; if you need parallel fan-out, shard across several `PubSub` instances.
 - **No hidden concurrency.** The library starts no goroutines and never sleeps. `Close` and `Wait` finalization are synchronous.
-- **No panics, no logs.** For values obtained from `NewPubSub` and `NewSubscriber` (including the `nil` subscriber returned after `Close`), invalid operations are safe no-ops with defined return values. Zero-value structs and a `nil *PubSub` are not supported.
-- **Memory.** A subscriber is detached from all topics when it finishes; empty topics are deleted. A subscriber that never calls `Wait` is released by `Close`.
+- **No panics, no logs.** For values obtained from `NewPubSub` and `NewSubscriber` (including the `nil` subscriber returned after `Close`), invalid operations are safe no-ops with defined return values. Zero-value structs and a `nil *PubSub` are not supported -- `Hash` happens not to dereference its receiver, but that is an implementation detail, not a guarantee.
+- **Memory.** A subscriber is detached from all topics when it finishes; empty topics are deleted. A registered subscriber that never calls `Wait` is held by the hub until `Close`. On a long-lived hub that is a leak, so a caller that may return before its `Wait` should `defer sub.Wait(0)` -- note that this discards the returned map and finishes the subscriber, so do not use it when another goroutine is still collecting into it.
 
 ## Use Cases
 

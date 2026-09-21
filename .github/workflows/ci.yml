@@ -83,3 +83,5 @@ jobs:
         with:
           go-version: stable
       - run: go build ./...
+      - name: Example output matches its golden file
+        run: make example-check

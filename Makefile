@@ -4,7 +4,7 @@ GOLANGCI_LINT_VERSION ?= v2.13.2
 LINT = go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 COVERAGE_FILE = coverage.out
 
-.PHONY: help test cover bench fmt fmt-check vet lint vuln tidy-check check example clean
+.PHONY: help test cover bench fmt fmt-check vet lint vuln tidy-check check example example-check clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -40,6 +40,9 @@ check: fmt-check vet tidy-check lint test bench ## The CI gates (govulncheck run
 
 example: ## Run the sensors example
 	go run ./examples/sensors
+
+example-check: ## Run the sensors example and compare its output with the golden file
+	go run ./examples/sensors | diff -u examples/sensors/testdata/golden.txt -
 
 clean: ## Remove test output
 	rm -f $(COVERAGE_FILE) coverage.html

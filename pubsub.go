@@ -134,17 +134,18 @@ func (s *Subscriber) Wait(timeout time.Duration) map[string]any {
 	}
 	defer ps.mu.Unlock()
 	// Finalization is the linearization point: whether we got here directly,
-	// via waitCh, or via the timer, finish s if nobody else has.
-	if !s.done {
-		ps.finishLocked(s)
-	}
+	// via waitCh, or via the timer, finish s if nobody else has. finishLocked
+	// is idempotent, so a repeated Wait just falls through it.
+	ps.finishLocked(s)
 	// s.results is never nil, so the copy is never nil either.
 	return maps.Clone(s.results)
 }
 
-// Close shuts the hub down: it finishes every registered subscriber, waking
-// blocked Wait calls immediately, and drops all topics. It is synchronous,
-// idempotent, and always returns nil.
+// Close shuts the hub down: it finishes every registered subscriber - one
+// holding at least one subscription; a subscriber with none is in no topic, so
+// it stays live and finishes on its first Wait - waking blocked Wait calls
+// immediately, and drops all topics. It is synchronous, idempotent, and always
+// returns nil.
 func (ps *PubSub) Close() error {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
@@ -210,17 +211,28 @@ func (ps *PubSub) topicLocked(key string) *topic {
 // finishLocked performs the terminal transition for s: it stops accepting
 // messages, wakes a blocked Wait, and detaches s from every topic. It is the
 // only place that sets done or closes waitCh.
-// Caller holds ps.mu for writing and has checked !s.done.
+// Caller holds ps.mu for writing. Calling it on a finished subscriber is a
+// no-op, so callers need not check done first.
 //
 // Invariant relied upon: while s is live, every key in s.subscriptions has a
 // topic that contains s. Subscribe adds both under the lock and only
 // finishLocked removes s, so ps.topics[key] is always present here.
+//
+// Note on the idempotence guard: it makes a double finish safe, but it also
+// *masks* a broken invariant instead of trapping it. Without the guard, a
+// finished subscriber left attached to a topic would panic on the second
+// close(waitCh); with it, Close silently fails to detach that subscriber and
+// ps.topics never empties. assertNoFinishedInTopics in contract_test.go is the
+// detector that replaces the panic - keep it wired into the stress tests.
 //
 // Constraint on this function: Publish and Close call it while ranging over
 // topic.subscribers and ps.topics. It must only delete s itself (and topics
 // left empty by that), never insert entries or remove other subscribers, or
 // those loops would silently skip live subscribers.
 func (ps *PubSub) finishLocked(s *Subscriber) {
+	if s.done {
+		return
+	}
 	s.done = true
 	s.waiting = false
 	close(s.waitCh)

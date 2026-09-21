@@ -31,15 +31,6 @@ linters:
           - gosec
           - errcheck
           - forcetypeassert
-      # Legacy white-box tests are deliberately kept as written (see AGENTS.md);
-      # do not apply style modernizations to them.
-      - path: ^(pubsub|readme)_test\.go$
-        linters:
-          - intrange
-          - modernize
-          - copyloopvar
-          - revive
-          - gocritic
 
 formatters:
   enable:

@@ -6,7 +6,8 @@ contract, so most of the rules below are about not breaking it by accident.
 ## Before opening a pull request
 
 ```sh
-make check   # gofmt, go vet, go mod tidy -diff, golangci-lint, go test -race, benchmark smoke run
+make check          # gofmt, go vet, go mod tidy -diff, golangci-lint, go test -race, benchmark smoke run
+make example-check  # the sensors example must still print its golden output
 ```
 
 Go 1.26 or newer is required (see `go.mod`). The linter runs pinned via
@@ -23,7 +24,9 @@ toolchain explicitly: `GOTOOLCHAIN=go1.27.1 make check`.
   behaviour, update `doc.go`, `README.md` and `docs/README_RU.md` together and
   add a case to `contract_test.go` that pins the new behaviour.
 - **Existing tests stay green.** `pubsub_test.go` and `readme_test.go` are
-  legacy white-box tests and are deliberately kept as they are.
+  older white-box tests. They have been de-flaked onto `testing/synctest`;
+  change them to remove timing fragility if you must, never to weaken an
+  assertion.
 - **Design invariants** (see `AGENTS.md`): one hub-wide lock, no goroutines,
   sleeps, logging or panics inside the library, no external dependencies.
 - **Exported API changes** need a `CHANGELOG.md` entry under `[Unreleased]`

@@ -1,0 +1,4 @@
+Waiting for sensor data...
+Received 2 events:
+  humidity: map[unit:% value:60]
+  temperature: map[unit:°C value:25.5]

@@ -7,6 +7,43 @@ minor release may contain breaking changes; a patch release never does.
 
 ## [Unreleased]
 
+### Fixed
+- **`Wait`: the effective timeout is the *earliest deadline*, not the shortest
+  timeout.** The documented rule was wrong whenever concurrent `Wait` calls
+  start at different times: a `Wait(50ms)` entered after a `Wait(100ms)` has
+  the later deadline and is cut off by the longer one. Behaviour is unchanged;
+  the contract now says what the code does.
+- **`Close` finishes every *registered* subscriber.** A subscriber that never
+  called `Subscribe` is in no topic, so `Close` does not reach it: it stays
+  live and finishes on its first `Wait`. `doc.go` carried this qualifier, but
+  `Close`'s own godoc and both READMEs claimed "every subscriber".
+- **Documented complexity.** `Close` is `O(total subscriptions)`, not
+  `O(subscribers)`; `Publish` has the same worst case and was not documented at
+  all.
+
+### Changed
+- **The determinism claim is now precise, and supersedes the wording released
+  in 0.2.0.** The hub is linearizable -- every operation applies its effect
+  inside one hub-wide critical section -- but the outcome is *not* independent
+  of scheduling in the strong sense previously claimed: `Wait` releases the
+  lock while parked, and its wall-clock timer is not ordered against concurrent
+  calls. `Wait`'s linearization rule is what keeps results consistent.
+- `Wait` returns a **shallow** copy: payloads are shared by reference with the
+  publisher and with every other subscriber of the key.
+- A key published with a `nil` payload is *present* with a `nil` value; only
+  the comma-ok form distinguishes it from a key that received nothing.
+- `IsClosed`, `GetTopicCount` and `GetSubscriberCount` are documented as
+  advisory observers that are already stale when they return, and `Hash` as a
+  receiver-independent pure helper.
+- The README documents `defer sub.Wait(0)` as the cleanup idiom for a
+  subscriber whose owner may return before waiting.
+
+### Internal
+- `finishLocked` is now idempotent (`if s.done { return }`), removing the
+  double-`close(waitCh)` failure mode by construction; `Wait` no longer guards
+  the call. The invariant that guard used to enforce by panicking is pinned
+  instead by `assertNoFinishedInTopics` in `contract_test.go`.
+
 ## [0.2.0] - 2026-09-15
 
 ### Changed

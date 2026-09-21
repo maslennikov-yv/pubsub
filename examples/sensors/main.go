@@ -44,9 +44,11 @@ func main() {
 		}
 	}()
 
-	// Wait for events with a 1-second timeout
+	// Wait for events with a generous timeout: the publisher above needs
+	// 150ms, and the printed output is compared against a golden file by
+	// `make example-check`, so the margin has to survive a loaded CI runner.
 	fmt.Println("Waiting for sensor data...")
-	results := subscriber.Wait(1 * time.Second)
+	results := subscriber.Wait(5 * time.Second)
 
 	// Display the results in a stable order (map iteration order is random).
 	fmt.Printf("Received %d events:\n", len(results))
