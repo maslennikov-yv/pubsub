@@ -30,7 +30,36 @@ type Subscriber struct {
 	results       map[string]any
 	waitCh        chan struct{} // closed exactly once, when the subscriber finishes
 	waiting       bool          // a Wait call is blocked on waitCh
+	readyAll      bool          // a parked Wait offers to finish once every key has a value
+	readyAny      bool          // a parked Wait offers to finish once any key has a value
 	done          bool          // finished; terminal
+}
+
+// WaitOption changes when a single Wait call offers to finish the subscriber.
+// Options are evaluated per call; see Any and AtLeast.
+type WaitOption func(*waitConfig)
+
+// waitConfig is the per-call result of applying WaitOptions.
+type waitConfig struct {
+	any     bool
+	atLeast time.Duration
+}
+
+// Any makes Wait finish as soon as at least one subscribed key has a value,
+// instead of every key. Keys that receive a value before finalization are
+// still included in the result.
+func Any() WaitOption {
+	return func(c *waitConfig) { c.any = true }
+}
+
+// AtLeast makes Wait hold off finishing on completeness until d has passed
+// since the call: payloads published before that moment overwrite each other
+// ("latest wins"), and at entry+d the completeness rule (all keys, or any key
+// with Any) is checked against what is stored. The timeout still governs: if
+// d >= timeout the call simply finishes at its timeout. A d <= 0 has no
+// effect; when AtLeast is given more than once, the last one wins.
+func AtLeast(d time.Duration) WaitOption {
+	return func(c *waitConfig) { c.atLeast = d }
 }
 
 // NewPubSub creates an open hub with no topics.
@@ -98,7 +127,7 @@ func (ps *PubSub) Publish(key string, payload any) bool {
 	for s := range topic.subscribers {
 		s.results[key] = payload
 		delivered = true
-		if s.waiting && s.completeLocked() {
+		if s.readyLocked() {
 			ps.finishLocked(s)
 		}
 	}
@@ -112,22 +141,69 @@ func (ps *PubSub) Publish(key string, payload any) bool {
 // Concurrent Wait calls on one subscriber all return the same snapshot as
 // soon as the first of them finishes it. Wait on a nil subscriber returns an
 // empty map.
-func (s *Subscriber) Wait(timeout time.Duration) map[string]any {
+//
+// Options change only when this call offers to finish: Any relaxes "every
+// key" to "any key", AtLeast(d) defers the offer until d after the call. A
+// subscriber with no subscriptions finishes at once and the options are
+// ignored, as they are on a subscriber that has already finished. A
+// concurrent Wait without the same options can still finish the subscriber
+// earlier; every Wait then returns that snapshot.
+func (s *Subscriber) Wait(timeout time.Duration, opts ...WaitOption) map[string]any {
 	if s == nil {
 		return make(map[string]any)
 	}
 	ps := s.pubsub
 
+	var cfg waitConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	// deferred: this call does not offer to finish until entry+atLeast. An
+	// atLeast >= timeout never gets the chance, so it needs no timer at all.
+	deferred := cfg.atLeast > 0
+	hold := deferred && cfg.atLeast < timeout
+
 	ps.mu.Lock()
-	if !s.done && !ps.closed && timeout > 0 && !s.completeLocked() {
+	if !s.done && !ps.closed && timeout > 0 && len(s.subscriptions) > 0 &&
+		(deferred || !s.satisfiedLocked(cfg.any)) {
 		s.waiting = true
+		if !deferred {
+			s.offerLocked(cfg.any)
+		}
 		ps.mu.Unlock()
 
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
-		select {
-		case <-s.waitCh:
-		case <-timer.C:
+		var holdC <-chan time.Time
+		if hold {
+			holdTimer := time.NewTimer(cfg.atLeast)
+			defer holdTimer.Stop()
+			holdC = holdTimer.C
+		}
+	park:
+		for {
+			select {
+			case <-s.waitCh:
+				break park
+			case <-timer.C:
+				break park
+			case <-holdC:
+				// The hold is over: from now on this call offers to finish,
+				// checked first against what is already stored. If the
+				// subscriber finished meanwhile, waitCh is closed and the
+				// next select leaves the loop.
+				holdC = nil
+				ps.mu.Lock()
+				if !s.done {
+					s.offerLocked(cfg.any)
+					if s.readyLocked() {
+						ps.finishLocked(s)
+					}
+				}
+				ps.mu.Unlock()
+			}
 		}
 
 		ps.mu.Lock()
@@ -238,6 +314,8 @@ func (ps *PubSub) finishLocked(s *Subscriber) {
 	}
 	s.done = true
 	s.waiting = false
+	s.readyAll = false
+	s.readyAny = false
 	close(s.waitCh)
 	for key := range s.subscriptions {
 		topic := ps.topics[key]
@@ -253,4 +331,32 @@ func (ps *PubSub) finishLocked(s *Subscriber) {
 // Caller holds ps.mu.
 func (s *Subscriber) completeLocked() bool {
 	return len(s.results) == len(s.subscriptions)
+}
+
+// satisfiedLocked reports whether the subscriber meets a Wait's completeness
+// rule: any key with a value when anyKey is set, every key otherwise.
+// Caller holds ps.mu.
+func (s *Subscriber) satisfiedLocked(anyKey bool) bool {
+	if anyKey {
+		return len(s.results) > 0
+	}
+	return s.completeLocked()
+}
+
+// offerLocked records that a parked Wait now offers to finish under its rule.
+// The flags only ever go up while s is live: any parked Wait leaving its loop
+// finishes s, so an offer never outlives the Wait that made it.
+// Caller holds ps.mu for writing.
+func (s *Subscriber) offerLocked(anyKey bool) {
+	if anyKey {
+		s.readyAny = true
+	} else {
+		s.readyAll = true
+	}
+}
+
+// readyLocked reports whether some parked Wait's offer is met.
+// Caller holds ps.mu.
+func (s *Subscriber) readyLocked() bool {
+	return s.readyAny && len(s.results) > 0 || s.readyAll && s.completeLocked()
 }

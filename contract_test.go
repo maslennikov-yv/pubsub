@@ -596,6 +596,9 @@ func assertFinished(t *testing.T, sub *Subscriber) {
 	if sub.waiting {
 		t.Error("finished subscriber is still marked as waiting")
 	}
+	if sub.readyAll || sub.readyAny {
+		t.Error("finished subscriber still carries a Wait's offer to finish")
+	}
 	select {
 	case <-sub.waitCh:
 	default:
@@ -863,4 +866,420 @@ func TestPublishLeavesMultiTopicWaitersAttached(t *testing.T) {
 			t.Fatalf("expected 0 topics after Close, got %d", ps.GetTopicCount())
 		}
 	})
+}
+
+// --- wait options: Any and AtLeast -----------------------------------------
+
+// bubbledWaitOpts is bubbledWait with options.
+func bubbledWaitOpts(sub *Subscriber, timeout time.Duration, opts ...WaitOption) func() (map[string]any, bool) {
+	out := make(chan map[string]any, 1)
+	go func() { out <- sub.Wait(timeout, opts...) }()
+	return func() (map[string]any, bool) {
+		synctest.Wait()
+		select {
+		case res := <-out:
+			return res, true
+		default:
+			return nil, false
+		}
+	}
+}
+
+func TestWaitAnyFinishesOnFirstKey(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ps := NewPubSub()
+		sub := ps.NewSubscriber()
+		sub.Subscribe("a")
+		sub.Subscribe("b")
+
+		start := time.Now()
+		probe := bubbledWaitOpts(sub, time.Second, Any())
+		if _, done := probe(); done {
+			t.Fatal("Wait(Any) returned before any key had a value")
+		}
+		time.Sleep(30 * time.Millisecond)
+		if !ps.Publish("b", 2) {
+			t.Fatal("publish b: want true")
+		}
+		res, done := probe()
+		if !done {
+			t.Fatal("Wait(Any) did not finish on the first key")
+		}
+		if elapsed := time.Since(start); elapsed != 30*time.Millisecond {
+			t.Fatalf("finished at %v, want 30ms", elapsed)
+		}
+		if len(res) != 1 || res["b"] != 2 {
+			t.Fatalf("got %v, want map[b:2]", res)
+		}
+		assertFinished(t, sub)
+		if ps.Publish("a", 1) {
+			t.Fatal("publish after finish: want false")
+		}
+	})
+}
+
+// A value stored before Wait satisfies Any at entry, exactly as a complete
+// subscriber satisfies a plain Wait at entry.
+func TestWaitAnyEntryWithValueFinishesImmediately(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ps := NewPubSub()
+		sub := ps.NewSubscriber()
+		sub.Subscribe("a")
+		sub.Subscribe("b")
+		ps.Publish("a", 1)
+
+		start := time.Now()
+		res := sub.Wait(time.Second, Any())
+		if time.Since(start) != 0 {
+			t.Fatalf("Wait(Any) blocked for %v", time.Since(start))
+		}
+		if len(res) != 1 || res["a"] != 1 {
+			t.Fatalf("got %v, want map[a:1]", res)
+		}
+		assertFinished(t, sub)
+	})
+}
+
+// AtLeast holds a complete subscriber until entry+d, accepting overwrites,
+// and returns the latest value: this is what suppresses a spurious first
+// reading.
+func TestWaitAtLeastHoldsAndKeepsLatest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ps := NewPubSub()
+		sub := ps.NewSubscriber()
+		sub.Subscribe("relay")
+
+		start := time.Now()
+		probe := bubbledWaitOpts(sub, time.Second, AtLeast(100*time.Millisecond))
+		ps.Publish("relay", "on (bounce)")
+		if _, done := probe(); done {
+			t.Fatal("Wait(AtLeast) finished on completeness before d")
+		}
+		time.Sleep(50 * time.Millisecond)
+		if !ps.Publish("relay", "off") {
+			t.Fatal("overwrite during the hold: want true")
+		}
+		if _, done := probe(); done {
+			t.Fatal("Wait(AtLeast) finished before d")
+		}
+		time.Sleep(50 * time.Millisecond)
+		res, done := probe()
+		if !done {
+			t.Fatal("Wait(AtLeast) did not finish at d")
+		}
+		if elapsed := time.Since(start); elapsed != 100*time.Millisecond {
+			t.Fatalf("finished at %v, want 100ms", elapsed)
+		}
+		if res["relay"] != "off" {
+			t.Fatalf("got %v, want the latest value off", res)
+		}
+		assertFinished(t, sub)
+	})
+}
+
+// A publish before entry does not shorten the hold.
+func TestWaitAtLeastPublishedBeforeEntryStillHolds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ps := NewPubSub()
+		sub := ps.NewSubscriber()
+		sub.Subscribe("a")
+		ps.Publish("a", 1)
+
+		start := time.Now()
+		res := sub.Wait(time.Second, AtLeast(40*time.Millisecond))
+		if elapsed := time.Since(start); elapsed != 40*time.Millisecond {
+			t.Fatalf("finished at %v, want 40ms", elapsed)
+		}
+		if res["a"] != 1 {
+			t.Fatalf("got %v", res)
+		}
+	})
+}
+
+// Incomplete at entry+d: the call keeps waiting and finishes on the Publish
+// that completes it, like a plain Wait.
+func TestWaitAtLeastIncompleteAtHoldKeepsWaiting(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ps := NewPubSub()
+		sub := ps.NewSubscriber()
+		sub.Subscribe("a")
+		sub.Subscribe("b")
+		ps.Publish("a", 1)
+
+		start := time.Now()
+		probe := bubbledWaitOpts(sub, time.Second, AtLeast(100*time.Millisecond))
+		time.Sleep(100 * time.Millisecond)
+		if _, done := probe(); done {
+			t.Fatal("finished at d while incomplete")
+		}
+		time.Sleep(50 * time.Millisecond)
+		ps.Publish("b", 2)
+		res, done := probe()
+		if !done {
+			t.Fatal("the completing Publish did not finish the subscriber")
+		}
+		if elapsed := time.Since(start); elapsed != 150*time.Millisecond {
+			t.Fatalf("finished at %v, want 150ms", elapsed)
+		}
+		if len(res) != 2 {
+			t.Fatalf("got %v", res)
+		}
+	})
+}
+
+// Any and AtLeast combine: after the hold, one stored key is enough.
+func TestWaitAnyAtLeast(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ps := NewPubSub()
+		sub := ps.NewSubscriber()
+		sub.Subscribe("a")
+		sub.Subscribe("b")
+
+		start := time.Now()
+		probe := bubbledWaitOpts(sub, time.Second, Any(), AtLeast(100*time.Millisecond))
+		time.Sleep(10 * time.Millisecond)
+		ps.Publish("a", 1)
+		if _, done := probe(); done {
+			t.Fatal("finished before d")
+		}
+		time.Sleep(90 * time.Millisecond)
+		res, done := probe()
+		if !done || time.Since(start) != 100*time.Millisecond {
+			t.Fatalf("done=%v at %v, want done at 100ms", done, time.Since(start))
+		}
+		if len(res) != 1 || res["a"] != 1 {
+			t.Fatalf("got %v", res)
+		}
+	})
+}
+
+// d >= timeout: the timeout governs and the result is whatever was stored.
+func TestWaitAtLeastNotShorterThanTimeout(t *testing.T) {
+	for _, d := range []time.Duration{50 * time.Millisecond, 80 * time.Millisecond} {
+		t.Run(d.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ps := NewPubSub()
+				sub := ps.NewSubscriber()
+				sub.Subscribe("a")
+				ps.Publish("a", 1)
+
+				start := time.Now()
+				res := sub.Wait(50*time.Millisecond, AtLeast(d))
+				if elapsed := time.Since(start); elapsed != 50*time.Millisecond {
+					t.Fatalf("finished at %v, want the 50ms timeout", elapsed)
+				}
+				if res["a"] != 1 {
+					t.Fatalf("got %v", res)
+				}
+				assertFinished(t, sub)
+			})
+		})
+	}
+}
+
+// The last AtLeast wins; d <= 0 and a nil option change nothing.
+func TestWaitOptionRepeatsAndNoops(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ps := NewPubSub()
+		sub := ps.NewSubscriber()
+		sub.Subscribe("a")
+		ps.Publish("a", 1)
+		start := time.Now()
+		sub.Wait(time.Second, AtLeast(20*time.Millisecond), nil, AtLeast(60*time.Millisecond))
+		if elapsed := time.Since(start); elapsed != 60*time.Millisecond {
+			t.Fatalf("finished at %v, want the last AtLeast (60ms)", elapsed)
+		}
+
+		sub2 := ps.NewSubscriber()
+		sub2.Subscribe("a")
+		ps.Publish("a", 2)
+		start = time.Now()
+		sub2.Wait(time.Second, AtLeast(0), AtLeast(-time.Second))
+		if time.Since(start) != 0 {
+			t.Fatalf("AtLeast(<=0) held the call for %v", time.Since(start))
+		}
+	})
+}
+
+// No subscriptions: finished at once, options ignored. A held Wait here
+// would sit in no topic, out of Close's reach.
+func TestWaitOptionsWithoutSubscriptions(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ps := NewPubSub()
+		for _, opts := range [][]WaitOption{{Any()}, {AtLeast(time.Second)}, {Any(), AtLeast(time.Second)}} {
+			sub := ps.NewSubscriber()
+			start := time.Now()
+			if res := sub.Wait(5*time.Second, opts...); len(res) != 0 {
+				t.Fatalf("got %v", res)
+			}
+			if time.Since(start) != 0 {
+				t.Fatalf("blocked for %v", time.Since(start))
+			}
+			assertFinished(t, sub)
+		}
+	})
+}
+
+// After finishing, options are ignored and the snapshot is returned as is.
+func TestWaitOptionsAfterFinishReturnSnapshot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ps := NewPubSub()
+		sub := ps.NewSubscriber()
+		sub.Subscribe("a")
+		sub.Wait(10 * time.Millisecond)
+		start := time.Now()
+		res := sub.Wait(time.Second, Any(), AtLeast(500*time.Millisecond))
+		if time.Since(start) != 0 || len(res) != 0 {
+			t.Fatalf("after finish: blocked %v, got %v", time.Since(start), res)
+		}
+	})
+}
+
+// Close during the hold wakes the call at once with what was stored.
+func TestCloseDuringAtLeastHold(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ps := NewPubSub()
+		sub := ps.NewSubscriber()
+		sub.Subscribe("a")
+		ps.Publish("a", 1)
+
+		start := time.Now()
+		probe := bubbledWaitOpts(sub, time.Second, AtLeast(100*time.Millisecond))
+		time.Sleep(30 * time.Millisecond)
+		if err := ps.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+		res, done := probe()
+		if !done || time.Since(start) != 30*time.Millisecond {
+			t.Fatalf("done=%v at %v, want done at 30ms", done, time.Since(start))
+		}
+		if res["a"] != 1 {
+			t.Fatalf("got %v", res)
+		}
+		assertFinished(t, sub)
+	})
+}
+
+// Concurrent Waits with different options: the first one whose rule is met
+// finishes the subscriber for all of them. A plain Wait finishes a complete
+// subscriber before a concurrent AtLeast's hold is over; an Any finishes it
+// on the first key while a plain Wait still needs the second.
+func TestConcurrentWaitsWithDifferentOptions(t *testing.T) {
+	t.Run("plain cuts the hold short", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ps := NewPubSub()
+			sub := ps.NewSubscriber()
+			sub.Subscribe("a")
+
+			start := time.Now()
+			held := bubbledWaitOpts(sub, time.Second, AtLeast(100*time.Millisecond))
+			plain := bubbledWaitOpts(sub, time.Second)
+			time.Sleep(10 * time.Millisecond)
+			ps.Publish("a", 1)
+			resH, doneH := held()
+			resP, doneP := plain()
+			if !doneH || !doneP || time.Since(start) != 10*time.Millisecond {
+				t.Fatalf("held=%v plain=%v at %v, want both at 10ms", doneH, doneP, time.Since(start))
+			}
+			if resH["a"] != 1 || resP["a"] != 1 {
+				t.Fatalf("snapshots differ: %v %v", resH, resP)
+			}
+		})
+	})
+	t.Run("any finishes the plain one too", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ps := NewPubSub()
+			sub := ps.NewSubscriber()
+			sub.Subscribe("a")
+			sub.Subscribe("b")
+
+			plain := bubbledWaitOpts(sub, time.Second)
+			anyKey := bubbledWaitOpts(sub, time.Second, Any())
+			ps.Publish("a", 1)
+			resP, doneP := plain()
+			resA, doneA := anyKey()
+			if !doneP || !doneA {
+				t.Fatalf("plain=%v any=%v, want both done", doneP, doneA)
+			}
+			if len(resP) != 1 || len(resA) != 1 {
+				t.Fatalf("got %v and %v", resP, resA)
+			}
+		})
+	})
+}
+
+// A Publish racing the end of the hold either lands before the check (the
+// result holds it and Publish returned true) or after the finish (Publish
+// returned false and the result holds the older value). Never anything else.
+func TestPublishRacingHoldEndIsConsistent(t *testing.T) {
+	for i := range 50 {
+		synctest.Test(t, func(t *testing.T) {
+			ps := NewPubSub()
+			sub := ps.NewSubscriber()
+			sub.Subscribe("a")
+			ps.Publish("a", 1)
+
+			published := make(chan bool, 1)
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				published <- ps.Publish("a", 2)
+			}()
+			res := sub.Wait(time.Second, AtLeast(50*time.Millisecond))
+			ok := <-published
+			if ok != (res["a"] == 2) {
+				t.Fatalf("iteration %d: Publish=%v but result %v", i, ok, res)
+			}
+		})
+	}
+}
+
+// Stress the options under the race detector together with Close.
+func TestStressWaitOptions(t *testing.T) {
+	const iterations = 50
+	for i := range iterations {
+		ps := NewPubSub()
+		var wg sync.WaitGroup
+		for j := range 20 {
+			sub := ps.NewSubscriber()
+			wg.Add(1)
+			go func(sub *Subscriber, seed int64) {
+				defer wg.Done()
+				r := rand.New(rand.NewSource(seed)) // deterministic pseudo-random schedule, not security
+				for range 3 {
+					sub.Subscribe(fmt.Sprintf("k%d", r.Intn(6)))
+				}
+				var opts []WaitOption
+				if r.Intn(2) == 0 {
+					opts = append(opts, Any())
+				}
+				if r.Intn(2) == 0 {
+					opts = append(opts, AtLeast(time.Duration(r.Intn(2))*time.Millisecond))
+				}
+				done := make(chan struct{})
+				pr := rand.New(rand.NewSource(seed + 1)) // the publisher's own source: rand.Rand is not goroutine-safe
+				go func() {
+					defer close(done)
+					for k := range 5 {
+						ps.Publish(fmt.Sprintf("k%d", pr.Intn(6)), k)
+					}
+				}()
+				assertNoFinishedInTopics(t, ps)
+				sub.Wait(time.Duration(1+r.Intn(3))*time.Millisecond, opts...)
+				<-done
+			}(sub, int64(i*100+j))
+		}
+		finished := make(chan struct{})
+		go func() { wg.Wait(); close(finished) }()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("iteration %d: deadlock", i)
+		}
+		if err := ps.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+		if ps.GetTopicCount() != 0 {
+			t.Fatalf("iteration %d: %d topics left", i, ps.GetTopicCount())
+		}
+	}
 }

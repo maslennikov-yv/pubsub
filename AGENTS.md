@@ -50,6 +50,10 @@ make example-check # the example's output must match examples/sensors/testdata/g
   still share topics** (mid-run in `TestStressCloseSubscribePublishWait`, and in
   `TestPublishLeavesMultiTopicWaitersAttached`). After `Close` returns,
   `ps.topics` is empty and the check inspects nothing.
+- **Offers only rise while live.** `readyAll`/`readyAny` are set by a parked
+  `Wait` (at park, or at the end of its `AtLeast` hold) and cleared only by
+  `finishLocked`: any parked `Wait` leaving its loop finishes the subscriber,
+  so no offer outlives its call. `Publish` finishes on `readyLocked()`.
 - **`results ⊆ subscriptions`**, so completeness is `len(results) == len(subscriptions)`.
 - **`Publish` runs under the write lock** and its boolean is exact: `true` iff
   at least one live subscriber stored the payload.
@@ -63,7 +67,7 @@ make example-check # the example's output must match examples/sensors/testdata/g
 - Exported API changes additionally require a minor version bump (v0.x).
 - The white-box tests (`pubsub_test.go`, `readme_test.go`) access unexported
   fields `topics`, `pubsub`, `subscriptions`, `results`, `waitCh`, and
-  `contract_test.go` additionally reads `mu`, `waiting`, `done`, `closed` and
+  `contract_test.go` additionally reads `mu`, `waiting`, `readyAll`, `readyAny`, `done`, `closed` and
   `topic.subscribers`; keep those names.
 - Timing-sensitive tests use `testing/synctest`. Inside a bubble, waiting on a
   mutex is **not** durably blocking: a goroutine queued on `ps.mu` freezes the

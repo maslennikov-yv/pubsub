@@ -85,3 +85,40 @@ func ExamplePubSub_Hash() {
 	// Output:
 	// ebf13c772710e5bc59e6f266271799d6
 }
+
+// ExampleAny returns as soon as one of several keys has a value - here a
+// reading that arrived before Wait was even called.
+func ExampleAny() {
+	hub := pubsub.NewPubSub()
+	defer hub.Close()
+
+	sub := hub.NewSubscriber()
+	sub.Subscribe("hall/motion")
+	sub.Subscribe("kitchen/door")
+
+	hub.Publish("kitchen/door", "open")
+
+	results := sub.Wait(time.Minute, pubsub.Any())
+	fmt.Println(len(results), results["kitchen/door"])
+	// Output:
+	// 1 open
+}
+
+// ExampleAtLeast suppresses a spurious first reading: the relay bounces to
+// "on" and settles to "off", and Wait reports the settled value because it
+// does not finish before d has passed.
+func ExampleAtLeast() {
+	hub := pubsub.NewPubSub()
+	defer hub.Close()
+
+	sub := hub.NewSubscriber()
+	sub.Subscribe("relay")
+
+	hub.Publish("relay", "on") // bounce
+	hub.Publish("relay", "off")
+
+	results := sub.Wait(time.Second, pubsub.AtLeast(20*time.Millisecond))
+	fmt.Println(results["relay"])
+	// Output:
+	// off
+}

@@ -7,6 +7,24 @@ minor release may contain breaking changes; a patch release never does.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-21
+
+### Added
+- **Wait options.** `Wait(timeout, opts ...WaitOption)` takes `Any()` --
+  finish on the first subscribed key with a value instead of every key -- and
+  `AtLeast(d)` -- do not finish on that rule before `d` has passed since the
+  call, letting publishes overwrite each other meanwhile, so a spurious first
+  reading gives way to the settled one. They combine. The timeout still
+  governs (`d >= timeout` ends the call at its timeout), `d <= 0` is a no-op,
+  the last `AtLeast` wins, and a subscriber with no subscriptions or one that
+  has finished ignores them. The end of a hold is a fifth finishing moment in
+  the contract. Options are per call while the finish stays shared, so a
+  concurrent plain `Wait` can finish a subscriber before another call's hold
+  is over.
+- **Compatibility.** Existing calls compile unchanged. A method value
+  assigned to `func(time.Duration) map[string]any` and an interface declaring
+  the old `Wait` signature no longer match and must be updated.
+
 ### Fixed
 - **`Wait`: the effective timeout is the *earliest deadline*, not the shortest
   timeout.** The documented rule was wrong whenever concurrent `Wait` calls
@@ -96,7 +114,8 @@ minor release may contain breaking changes; a patch release never does.
 
 - Initial release.
 
-[Unreleased]: https://github.com/maslennikov-yv/pubsub/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/maslennikov-yv/pubsub/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/maslennikov-yv/pubsub/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/maslennikov-yv/pubsub/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/maslennikov-yv/pubsub/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/maslennikov-yv/pubsub/releases/tag/v0.1.0

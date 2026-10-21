@@ -62,14 +62,19 @@ A runnable version lives in [`examples/sensors/main.go`](examples/sensors/main.g
 
 A subscriber is **live** from `NewSubscriber` until it **finishes**. Finishing is a single, atomic, terminal transition: the subscriber stops accepting messages and is removed from every topic (topics left empty are deleted). It happens at exactly one of these moments:
 
-1. **Entry to `Wait`**, if the hub is closed, the timeout is `<= 0`, or the subscriber is already *complete* (every subscribed key has a value; a subscriber with no subscriptions is trivially complete and returns at once).
-2. **A `Publish` that makes the subscriber complete while a `Wait` is blocked.**
+1. **Entry to `Wait`**, if the hub is closed, the timeout is `<= 0`, the subscriber has no subscriptions, or it already meets the call's *rule* and the call has no `AtLeast` hold.
+2. **A `Publish` that meets the rule of a blocked `Wait` offering to finish.**
 3. **Expiry of a blocked `Wait`'s timer.**
 4. **`Close`.**
+5. **The end of a blocked `Wait`'s `AtLeast` hold**, if what is stored meets the call's rule at that moment.
 
-Becoming complete *before* `Wait` is called is **not** a trigger: the subscriber stays live, keeps accepting overwrites, and accepts further `Subscribe` calls. So `Subscribe(a); Publish(a); Subscribe(b)` works as expected: `Wait` will require both `a` and `b`.
+A `Wait`'s rule is *completeness* -- every subscribed key has a value -- or, with `Any()`, at least one key with a value. A blocked `Wait` offers to finish from the moment it parks, or, with `AtLeast(d)`, from `d` after it was entered; until then publishes overwrite freely. See [Wait options](#wait-options).
+
+Meeting the rule *before* `Wait` is called is **not** a trigger by itself: the subscriber stays live, keeps accepting overwrites, and accepts further `Subscribe` calls; it finishes on entry to `Wait` (point 1) or at the end of that call's hold (point 5). So `Subscribe(a); Publish(a); Subscribe(b)` works as expected: `Wait` will require both `a` and `b`.
 
 A subscriber is **single-use**. After it finishes, `Subscribe` is a no-op and every further `Wait` returns the same snapshot immediately without blocking. Concurrent `Wait` calls on one subscriber all return that snapshot as soon as the first of them finishes it, so what governs is the **earliest deadline** among the `Wait` calls started while the subscriber was live -- a deadline being the moment a `Wait` was entered plus its timeout, or the moment of the call itself when the timeout is `<= 0`. That is *not* the shortest timeout: a `Wait(50ms)` started after a `Wait(100ms)` has the later deadline and is cut off by it. A `Wait` started after the subscriber finished changes nothing.
+
+Options are per call, but the finish is shared: the subscriber finishes at the first moment *any* blocked `Wait`'s offer is met. A plain `Wait` next to an `AtLeast` one finishes a complete subscriber before the hold is over; an `Any` next to a plain `Wait` finishes it on the first key.
 
 ### `Subscribe(key)`
 
@@ -82,14 +87,25 @@ Delivers `payload` to every live subscriber of `key`, replacing any earlier payl
 Consequences:
 
 - **Latest wins while live.** Overwrites are accepted until the subscriber finishes.
-- **Once `Wait` is in progress, it returns at the first moment of completeness**, and from then on the subscriber accepts nothing (`Publish` returns `false` if it was the only subscriber).
+- **Once `Wait` is in progress, it returns at the first moment its rule is met** (completeness by default; see [Wait options](#wait-options)), and from then on the subscriber accepts nothing (`Publish` returns `false` if it was the only subscriber).
 - A subscriber that has collected everything but **never calls `Wait` stays registered** until `Close`; publishes to it keep returning `true`. Cleanup happens only on `Wait` or `Close`.
 
-### `Wait(timeout) map[string]any`
+### `Wait(timeout, opts...) map[string]any`
 
 Blocks until every subscribed key has a value, `timeout` elapses, or the hub closes; then finishes the subscriber and returns a copy of the results. The copy is **shallow**: payloads come back exactly as they were published, so every subscriber of a key -- and the publisher -- hold the same value. Keys that received nothing are absent, but a key published with a `nil` payload is *present* with a `nil` value, so only the comma-ok form (`v, ok := res[k]`) distinguishes the two. `timeout <= 0` returns immediately with whatever has arrived -- and finishes the subscriber. `Wait` on a `nil` subscriber returns an empty map.
 
 The linearization point of `Wait` is its finalization. A payload published in the tiny window between the timer expiring and finalization is included in the result, and that `Publish` returned `true`, so results and return values are always mutually consistent.
+
+#### Wait options
+
+- **`Any()`** -- finish as soon as at least one subscribed key has a value, instead of every key. A value published before `Wait` counts: the call returns at once.
+- **`AtLeast(d)`** -- do not finish on the rule before `d` has passed since the call. Publishes during the hold overwrite each other (latest wins); at the end of the hold the rule is checked against what is stored, and if it is not met yet the call keeps waiting as usual. This suppresses a spurious first reading: a relay that bounces to `on` and settles to `off` within `d` is reported as `off`. The timeout still governs: with `d >= timeout` the call ends at its timeout. `d <= 0` has no effect; when given twice, the last `AtLeast` wins.
+- They combine: `Wait(time.Minute, pubsub.Any(), pubsub.AtLeast(500*time.Millisecond))`.
+- A subscriber with no subscriptions, or one that has already finished, ignores the options.
+
+```go
+results := sub.Wait(time.Second, pubsub.AtLeast(200*time.Millisecond))
+```
 
 ### `Close() error`
 
@@ -102,7 +118,9 @@ Marks the hub closed, finishes every **registered** subscriber -- one holding at
 | `NewPubSub() *PubSub` | Create an open hub. |
 | `(*PubSub).NewSubscriber() *Subscriber` | Create a live subscriber; `nil` after `Close`. |
 | `(*Subscriber).Subscribe(key string)` | Register interest in a key. |
-| `(*Subscriber).Wait(timeout time.Duration) map[string]any` | Collect results. |
+| `(*Subscriber).Wait(timeout time.Duration, opts ...WaitOption) map[string]any` | Collect results. |
+| `Any() WaitOption` | `Wait` finishes on the first key with a value. |
+| `AtLeast(d time.Duration) WaitOption` | `Wait` does not finish on its rule before `d`. |
 | `(*PubSub).Publish(key string, payload any) bool` | Deliver a payload. |
 | `(*PubSub).Close() error` | Shut down; always `nil`. |
 | `(*PubSub).IsClosed() bool` | Whether `Close` was called. |
@@ -130,6 +148,9 @@ contain breaking changes (listed in [CHANGELOG.md](CHANGELOG.md)); a **patch**
 release never does. v0.2.0 removed `PubSubError`, the cleanup
 constants and the exported `Topic` type, and changed the behaviour of a
 subscriber that completes before `Wait`; see the changelog for details.
+v0.3.0 added the variadic `opts` to `Wait`: calls compile unchanged, but a
+method value assigned to `func(time.Duration) map[string]any` or an interface
+declaring the old signature must be updated.
 
 ## Development
 

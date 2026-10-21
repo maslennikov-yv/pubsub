@@ -3,7 +3,10 @@
 //
 // A typical use is polling a group of sensors: subscribe to one key per
 // sensor, publish each reading as it arrives, and Wait returns as soon as
-// every key has a value or the timeout elapses, whichever comes first.
+// every key has a value or the timeout elapses, whichever comes first. The
+// Any option relaxes that to the first key with a value, and AtLeast(d)
+// keeps collecting overwrites for d before deciding, so a spurious first
+// reading gives way to the settled one.
 //
 // # Contract
 //
@@ -25,15 +28,28 @@
 // removed from every topic (topics left empty are deleted). It happens at
 // exactly one of these moments:
 //
-//  1. Entry to Wait, if the hub is closed, the timeout is <= 0, or the
-//     subscriber is already complete (every subscribed key has a value; a
-//     subscriber with no subscriptions is trivially complete).
-//  2. A Publish that makes the subscriber complete while a Wait is blocked.
+//  1. Entry to Wait, if the hub is closed, the timeout is <= 0, the
+//     subscriber has no subscriptions, or it already meets the call's rule
+//     and the call has no AtLeast hold.
+//  2. A Publish that meets the rule of a blocked Wait offering to finish.
 //  3. Expiry of a blocked Wait's timer.
 //  4. Close.
+//  5. The end of a blocked Wait's AtLeast hold, if what is stored meets the
+//     call's rule at that moment.
 //
-// Becoming complete before Wait is called is not a trigger: the subscriber
-// stays live, keeps accepting overwrites, and accepts further Subscribe calls.
+// A Wait's rule is completeness - every subscribed key has a value - or, with
+// the Any option, at least one key with a value. A blocked Wait offers to
+// finish under its rule from the moment it parks, or, with AtLeast(d), from
+// d after it was entered; until then publishes overwrite freely ("latest
+// wins") and nothing finishes the subscriber on its behalf. AtLeast(d) with
+// d >= timeout never offers, so that call ends at its timeout. A subscriber
+// with no subscriptions, or one that has already finished, ignores the
+// options.
+//
+// Meeting a rule before Wait is called is not a trigger by itself: the
+// subscriber stays live, keeps accepting overwrites, and accepts further
+// Subscribe calls; it finishes on entry to Wait (point 1), or at the end of
+// the hold when that Wait has one (point 5).
 //
 // Publish returns true if and only if the hub is open and at least one live
 // subscriber holds the key. Every such subscriber stores the payload under
@@ -68,8 +84,12 @@
 // later than a Wait(100ms) has the later deadline and is cut off by it. A Wait
 // started after the subscriber finished changes nothing. A woken Wait must
 // re-acquire the lock before returning, so no Wait outlives that earliest
-// deadline - though any Wait can of course return sooner, when a Publish
-// completes the subscriber or Close intervenes. Cleanup happens only on Wait
+// deadline - though any Wait can of course return sooner, when a Publish or
+// the end of a hold meets some blocked Wait's rule, or Close intervenes.
+// Options are per call, but the finish is shared: the subscriber finishes at
+// the first moment any blocked Wait's offer is met. A plain Wait running next
+// to an AtLeast one therefore finishes a complete subscriber before the hold
+// is over, and an Any next to a plain Wait finishes it on the first key. Cleanup happens only on Wait
 // or Close; a registered subscriber that never calls Wait stays registered
 // until Close.
 //
