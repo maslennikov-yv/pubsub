@@ -1,6 +1,6 @@
 # Development tasks for github.com/maslennikov-yv/pubsub (a library: no build artifacts).
 
-GOLANGCI_LINT_VERSION ?= v2.13.2
+GOLANGCI_LINT_VERSION ?= v2.15.0
 LINT = go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 COVERAGE_FILE = coverage.out
 
